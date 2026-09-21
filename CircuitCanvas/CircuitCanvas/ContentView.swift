@@ -17,6 +17,7 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var tool: Tool = .select
     @State private var selectedLibrary = "汎用ブロック"
+    @State private var selectedSymbol: UUID?
     @State private var selectedNote: UUID?
     @State private var linkingNote: UUID?
     @State private var pendingWireStart: CGPoint?
@@ -139,8 +140,13 @@ struct ContentView: View {
                     }
                 }.allowsHitTesting(false)
                 ForEach(symbols) { symbol in
-                    SymbolCard(symbol: symbol, isConnected: isConnected(symbol))
+                    SymbolCard(symbol: symbol, isConnected: isConnected(symbol), selected: selectedSymbol == symbol.id)
                         .position(symbol.position)
+                        .onTapGesture {
+                            guard tool == .select else { return }
+                            selectedSymbol = symbol.id
+                            selectedNote = nil
+                        }
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in move(symbolID: symbol.id, by: value.translation) }
@@ -151,7 +157,11 @@ struct ContentView: View {
                     NoteCard(
                         note: $note,
                         selected: selectedNote == note.id,
-                        select: { selectedNote = note.id }
+                        select: {
+                            guard tool == .select else { return }
+                            selectedNote = note.id
+                            selectedSymbol = nil
+                        }
                     )
                         .position(note.position)
                         .highPriorityGesture(
@@ -178,19 +188,33 @@ struct ContentView: View {
                 }
                 else if tool == .note { notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
                 else if tool == .symbol { symbols.append(.init(title: selectedLibrary, icon: icon(for: selectedLibrary), position: point)); tool = .select }
-                else { selectedNote = nil }
+                else { selectedNote = nil; selectedSymbol = nil }
             }
     }
 
     private var inspector: some View {
         Form {
-            if let id = selectedNote, let index = notes.firstIndex(where: { $0.id == id }) {
+            if let id = selectedSymbol, let index = symbols.firstIndex(where: { $0.id == id }) {
+                Section("シンボル") {
+                    Label(symbols[index].title, systemImage: symbols[index].icon)
+                    TextField("名称", text: $symbols[index].title)
+                    LabeledContent("接続", value: isConnected(symbols[index]) ? "接続あり" : "未接続")
+                    Button("シンボルを削除", role: .destructive) {
+                        symbols.remove(at: index)
+                        selectedSymbol = nil
+                    }
+                }
+            } else if let id = selectedNote, let index = notes.firstIndex(where: { $0.id == id }) {
                 Section("実験メモ") {
                     Picker("種別", selection: $notes[index].type) { ForEach(NoteType.allCases) { Text($0.rawValue).tag($0) } }
                     TextField("タイトル", text: $notes[index].title)
                     TextField("本文", text: $notes[index].body, axis: .vertical)
                     Toggle("完了", isOn: $notes[index].complete)
                     Button("関連付けを開始", systemImage: "arrowshape.turn.up.right") { linkingNote = id }
+                    Button("メモを削除", role: .destructive) {
+                        notes.remove(at: index)
+                        selectedNote = nil
+                    }
                 }
             } else {
                 Section("図面") { LabeledContent("シンボル", value: "\(symbols.count)"); LabeledContent("未完了メモ", value: "\(notes.filter { !$0.complete }.count)") }
@@ -263,7 +287,8 @@ struct ContentView: View {
 private struct SymbolCard: View {
     let symbol: SymbolItem
     let isConnected: Bool
-    var body: some View { VStack(spacing: 6) { Image(systemName: symbol.icon).foregroundStyle(.secondary); Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1) }.frame(width: 150, height: 64).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary, lineWidth: 2)).overlay { HStack { Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10); Spacer(); Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10) } }.accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")") }
+    let selected: Bool
+    var body: some View { VStack(spacing: 6) { Image(systemName: symbol.icon).foregroundStyle(.secondary); Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1) }.frame(width: 150, height: 64).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2)).overlay { HStack { Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10); Spacer(); Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10) } }.accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")") }
 }
 
 private struct NoteCard: View {
