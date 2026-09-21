@@ -104,24 +104,24 @@ struct ContentView: View {
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
                     .scaleEffect(canvasScale, anchor: .topLeading)
                     .offset(canvasOffset)
-                VStack {
-                    HStack {
-                        Spacer()
-                        Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(.caption.weight(.medium))
-                            .padding(8)
-                            .background(.thinMaterial, in: Capsule())
-                    }
-                    Spacer()
-                }
-                .padding(12)
-                .allowsHitTesting(false)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .coordinateSpace(name: "editorViewport")
             .simultaneousGesture(canvasZoomGesture)
             .clipped()
+            .overlay(alignment: .topTrailing) {
+                zoomIndicator
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
         }
+    }
+
+    private var zoomIndicator: some View {
+        Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
+            .font(.caption.weight(.medium))
+            .padding(8)
+            .background(.thinMaterial, in: Capsule())
     }
 
     private var canvasSize: CGSize { .init(width: 2_400, height: 1_800) }
