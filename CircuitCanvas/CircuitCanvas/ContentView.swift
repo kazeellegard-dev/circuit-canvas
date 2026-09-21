@@ -58,7 +58,7 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil }
-                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil }
+                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil }
                     Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol }
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
                     Button("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right") { resetCanvasViewport() }
@@ -140,7 +140,16 @@ struct ContentView: View {
                     }
                 }.allowsHitTesting(false)
                 ForEach(symbols) { symbol in
-                    SymbolCard(symbol: symbol, isConnected: isConnected(symbol), selected: selectedSymbol == symbol.id)
+                    SymbolCard(
+                        symbol: symbol,
+                        isConnected: isConnected(symbol),
+                        selected: selectedSymbol == symbol.id,
+                        wireStartPinIndex: pendingWirePinIndex(for: symbol),
+                        selectPin: { index in
+                            guard tool == .wire else { return }
+                            selectWirePin(pins(for: symbol)[index])
+                        }
+                    )
                         .position(symbol.position)
                         .onTapGesture {
                             guard tool == .select else { return }
@@ -183,8 +192,7 @@ struct ContentView: View {
                 let point = canvasPoint(from: tap.location)
                 if let id = linkingNote { setAnchor(id, point); linkingNote = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
-                    if let start = pendingWireStart { wires.append(.init(start: start, end: pin)); pendingWireStart = nil; tool = .select }
-                    else { pendingWireStart = pin }
+                    selectWirePin(pin)
                 }
                 else if tool == .note { notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
                 else if tool == .symbol { symbols.append(.init(title: selectedLibrary, icon: icon(for: selectedLibrary), position: point)); tool = .select }
@@ -228,6 +236,24 @@ struct ContentView: View {
     }
 
     private func setAnchor(_ id: UUID, _ point: CGPoint) { guard let i = notes.firstIndex(where: { $0.id == id }) else { return }; notes[i].anchor = point }
+    private func selectWirePin(_ pin: CGPoint) {
+        if let start = pendingWireStart {
+            guard start.distance(to: pin) >= 1 else { return }
+            let alreadyExists = wires.contains { wire in
+                (wire.start.distance(to: start) < 1 && wire.end.distance(to: pin) < 1) ||
+                (wire.start.distance(to: pin) < 1 && wire.end.distance(to: start) < 1)
+            }
+            if !alreadyExists { wires.append(.init(start: start, end: pin)) }
+            pendingWireStart = nil
+            tool = .select
+        } else {
+            pendingWireStart = pin
+        }
+    }
+    private func pendingWirePinIndex(for symbol: SymbolItem) -> Int? {
+        guard let start = pendingWireStart else { return nil }
+        return pins(for: symbol).firstIndex { $0.distance(to: start) < 1 }
+    }
     private func symbolBinding(for id: UUID) -> Binding<SymbolItem>? {
         guard let initial = symbols.first(where: { $0.id == id }) else { return nil }
         return Binding(
@@ -316,7 +342,37 @@ private struct SymbolCard: View {
     let symbol: SymbolItem
     let isConnected: Bool
     let selected: Bool
-    var body: some View { VStack(spacing: 6) { Image(systemName: symbol.icon).foregroundStyle(.secondary); Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1) }.frame(width: 150, height: 64).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2)).overlay { HStack { Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10); Spacer(); Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10) } }.accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")").accessibilityIdentifier("symbol-\(symbol.title)") }
+    let wireStartPinIndex: Int?
+    let selectPin: (Int) -> Void
+    var body: some View {
+        ZStack {
+            VStack(spacing: 6) {
+                Image(systemName: symbol.icon).foregroundStyle(.secondary)
+                Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")")
+            .accessibilityIdentifier("symbol-\(symbol.title)")
+
+            HStack { pin(0); Spacer(); pin(1) }
+        }
+        .frame(width: 150, height: 64)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2))
+    }
+    private func pin(_ index: Int) -> some View {
+        Button { selectPin(index) } label: {
+            Circle()
+                .fill(wireStartPinIndex == index ? Color.accentColor : .clear)
+                .stroke(isConnected ? .green : .orange, lineWidth: 2)
+                .frame(width: 10, height: 10)
+                .frame(width: 32, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(index == 0 ? "左ピン" : "右ピン")
+        .accessibilityIdentifier("symbol-\(symbol.title)-pin-\(index)")
+    }
 }
 
 private struct NoteCard: View {

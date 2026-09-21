@@ -68,6 +68,21 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testWireToolConnectsTwoSymbolPins() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        app.buttons["配線"].tap()
+        app.buttons["symbol-Temperature-pin-1"].tap()
+        app.buttons["symbol-CAN-pin-1"].tap()
+        app.buttons["確認"].tap()
+
+        let wireCount = app.descendants(matching: .any).matching(identifier: "wire-count").firstMatch
+        XCTAssertTrue(wireCount.waitForExistence(timeout: 2))
+        XCTAssertEqual(wireCount.value as? String, "4")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
