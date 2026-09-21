@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QA verdict (Claude Code -> Codex)",
+  "description": "Claude Code が docs/qa/loop/verdict.json に書く判定。scripts/qa-loop.sh が status で分岐し、failures を Codex に渡す。",
+  "type": "object",
+  "required": ["task", "commit", "status", "checked_at", "environment", "items", "failures", "unverified", "report"],
+  "properties": {
+    "task": { "type": "string", "description": "対象タスク名（task ファイルの名前）" },
+    "commit": { "type": "string", "description": "検証した HEAD の短縮ハッシュ" },
+    "status": {
+      "enum": ["pass", "fail", "blocked"],
+      "description": "pass=全項目成功 / fail=失敗が1件以上 / blocked=環境要因で検証できない"
+    },
+    "checked_at": { "type": "string", "description": "ISO 8601" },
+    "environment": { "type": "string", "description": "例: iPad Pro 11-inch (M5) / iOS 26.5 シミュレーター" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "result"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "result": { "enum": ["成功", "失敗", "確認不能"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "description": "result が「失敗」の項目。status=pass のときは空配列。",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "title", "repro_steps", "actual", "expected"],
+        "properties": {
+          "id": { "type": "string", "description": "例: C1, S1" },
+          "severity": { "enum": ["critical", "major", "minor"] },
+          "title": { "type": "string" },
+          "repro_steps": { "type": "array", "items": { "type": "string" } },
+          "actual": { "type": "string" },
+          "expected": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "リポジトリルートからの相対パス（スクリーンショット、.ips など）"
+          }
+        }
+      }
+    },
+    "unverified": { "type": "array", "items": { "type": "string" }, "description": "未確認事項（実機未確認など）" },
+    "report": { "type": "string", "description": "詳細レポート（Markdown）のパス" }
+  }
+}
