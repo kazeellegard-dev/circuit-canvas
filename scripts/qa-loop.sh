@@ -7,7 +7,7 @@
 # 終了コード: 0=pass / 1=反復上限に到達 / 2=事前チェック失敗・blocked・保護違反
 #
 # 環境変数:
-#   CODEX_CMD    Codex の非対話コマンド        (既定: "codex exec")
+#   CODEX_CMD    Codex の非対話コマンド        (既定: "codex exec -s workspace-write")
 #   CLAUDE_CMD   Claude Code の非対話コマンド  (既定: "claude -p")
 #   CLAUDE_ARGS  Claude Code に追加する引数     (既定: --allowedTools を最小限に設定)
 #   SIM_ID       テスト対象シミュレーターの UDID (既定: iPad Pro 11-inch (M5))
@@ -20,7 +20,7 @@ VERDICT="$LOOP_DIR/verdict.json"
 PROJECT="$APP_DIR/CircuitCanvas.xcodeproj"
 SCHEME="CircuitCanvas"
 SIM_ID="${SIM_ID:-839D27C2-04D6-43AF-BEAD-924C3E61401A}"
-CODEX_CMD="${CODEX_CMD:-codex exec}"
+CODEX_CMD="${CODEX_CMD:-codex exec -s workspace-write}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude -p}"
 CLAUDE_ARGS="${CLAUDE_ARGS:---allowedTools Bash,Read,Write,Glob,Grep,mcp__Claude_Code_iOS_Simulator__*}"
 
@@ -68,6 +68,11 @@ if [[ $DRY_RUN -eq 0 ]]; then
   command -v "${CODEX_ARR[0]}" >/dev/null || die "${CODEX_ARR[0]} が PATH にありません（CODEX_CMD で指定可）"
   command -v "${CLAUDE_ARR[0]}" >/dev/null || die "${CLAUDE_ARR[0]} が PATH にありません（CLAUDE_CMD で指定可）"
 fi
+if [[ $ALLOW_STAGED -eq 0 ]] && ! git diff --quiet; then
+  echo "追跡中ファイルに未コミットの変更があります。Codex の変更と区別できないため中止します:" >&2
+  git diff --name-only | sed 's/^/  /' >&2
+  die "先にコミットするか、--allow-staged を付けてください"
+fi
 if [[ $ALLOW_STAGED -eq 0 ]] && ! git diff --cached --quiet; then
   echo "ステージ済みの変更があります。Codex のコミットに巻き込まれる恐れがあるため中止します:" >&2
   git diff --cached --name-only | sed 's/^/  /' >&2
@@ -82,6 +87,24 @@ rm -f "$VERDICT"
 run() { # 実行内容を表示し、dry-run では実行しない
   if [[ $DRY_RUN -eq 1 ]]; then echo "  [dry-run] $1 ...（プロンプトは runs/ 配下のファイルを参照）"; return 0; fi
   "$@"
+}
+
+snapshot_untracked() { git ls-files -o --exclude-standard | sort; }
+
+# Codex はサンドボックスで .git に書けないため、コミットはループ側で行う。
+# Codex が変更・新規作成したパスだけを、パス指定でコミットする（loop/ 配下は除外）。
+commit_codex_changes() { # $1=イテレーション番号, $2=変更前の未追跡ファイル一覧
+  local changed="$RUN_DIR/iter$1-changed.txt"
+  { git ls-files -m; comm -13 "$2" <(snapshot_untracked); } | grep -v '^CircuitCanvas/docs/qa/loop/' | sort -u > "$changed" || true
+  if [[ ! -s "$changed" ]]; then
+    notify "Codex が何も変更しませんでした"
+    die "Codex が何も変更しませんでした（サンドボックスや権限の問題の可能性）。$RUN_DIR/iter$1-codex.log を確認してください"
+  fi
+  log "Codex の変更をコミット: $(wc -l < "$changed" | tr -d ' ') ファイル"
+  git add --pathspec-from-file="$changed"
+  git commit -q --pathspec-from-file="$changed" -m "qa-loop: $TASK_NAME (iteration $1, Codex)" \
+    -m "Automated commit by scripts/qa-loop.sh of files changed by Codex."
+  log "commit $(git rev-parse --short HEAD)"
 }
 
 code_fingerprint() { # コード変更のみ（HEAD は含めない）
@@ -123,9 +146,11 @@ for ((i = 1; i <= MAX_ITER; i++)); do
 
   # 1) Codex: 実装／修正
   build_codex_prompt > "$RUN_DIR/iter$i-codex-prompt.md"
+  UNTRACKED_BEFORE="$RUN_DIR/iter$i-untracked-before.txt"; snapshot_untracked > "$UNTRACKED_BEFORE"
   log "Codex 実行"
   run "${CODEX_ARR[@]}" "$(cat "$RUN_DIR/iter$i-codex-prompt.md")" 2>&1 | tee "$RUN_DIR/iter$i-codex.log" || \
     { notify "Codex が失敗しました"; die "Codex が異常終了しました（$RUN_DIR/iter$i-codex.log）"; }
+  if [[ $DRY_RUN -eq 0 ]]; then commit_codex_changes "$i" "$UNTRACKED_BEFORE"; fi
 
   # 2) ゲート: xcodebuild test
   log "ゲート: xcodebuild test"
