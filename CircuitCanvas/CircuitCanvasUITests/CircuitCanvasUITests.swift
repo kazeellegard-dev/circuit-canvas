@@ -137,7 +137,30 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(newStart.isSelected)
         XCTAssertFalse(element(app, "wire-3").exists)
         app.buttons["symbol-Temperature-pin-0"].tap()
-        XCTAssertEqual(element(app, "wire-3").value as? String, "695.0,250.0,45.0,390.0")
+        XCTAssertEqual(coordinates(element(app, "wire-3")), [695, 250, 45, 390])
+        assertWireCount(app, "4")
+    }
+
+    @MainActor
+    func testResetStartPinCanBeReusedAsEndWithMatchingWireCoordinates() {
+        let app = XCUIApplication()
+        app.launch()
+        let oldStart = app.buttons["symbol-Temperature-pin-1"]
+        let newStart = app.buttons["symbol-CAN-pin-1"]
+        app.buttons["配線"].tap()
+        oldStart.tap()
+        app.buttons["配線"].tap()
+        newStart.tap()
+        XCTAssertTrue(newStart.isSelected)
+        XCTAssertFalse(oldStart.isSelected)
+        XCTAssertFalse(element(app, "wire-3").exists)
+        oldStart.tap()
+
+        let wire = element(app, "wire-3")
+        XCTAssertTrue(wire.waitForExistence(timeout: 2))
+        // Compare numeric coordinates: accessibility may include trailing zeros.
+        XCTAssertEqual(coordinates(wire), [695, 250, 195, 390])
+        XCTAssertEqual(coordinates(wire), coordinates(newStart) + coordinates(oldStart))
         assertWireCount(app, "4")
     }
 
