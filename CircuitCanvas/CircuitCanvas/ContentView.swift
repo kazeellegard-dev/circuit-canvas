@@ -106,11 +106,11 @@ struct ContentView: View {
                     .offset(canvasOffset)
                 VStack {
                     HStack {
-                        Label("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
+                        Spacer()
+                        Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
                             .font(.caption.weight(.medium))
                             .padding(8)
                             .background(.thinMaterial, in: Capsule())
-                        Spacer()
                     }
                     Spacer()
                 }
