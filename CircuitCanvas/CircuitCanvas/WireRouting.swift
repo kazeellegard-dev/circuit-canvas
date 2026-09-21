@@ -28,17 +28,78 @@ enum WireRouting {
         }
         return result
     }
+    /// Preserve room around bodies, reducing each facing margin in narrow gaps.
+    static func routingBounds(_ bodies: [CGRect]) -> [CGRect] {
+        bodies.map { body in
+            var left: CGFloat = 24, right: CGFloat = 24
+            var top: CGFloat = 20, bottom: CGFloat = 20
+            for other in bodies where other != body {
+                if other.maxY > body.minY && other.minY < body.maxY {
+                    if other.maxX <= body.minX { left = min(left, (body.minX-other.maxX)/2) }
+                    if other.minX >= body.maxX { right = min(right, (other.minX-body.maxX)/2) }
+                }
+                if other.maxX > body.minX && other.minX < body.maxX {
+                    if other.maxY <= body.minY { top = min(top, (body.minY-other.maxY)/2) }
+                    if other.minY >= body.maxY { bottom = min(bottom, (other.minY-body.maxY)/2) }
+                }
+            }
+            return CGRect(x:body.minX-left,y:body.minY-top,width:body.width+left+right,height:body.height+top+bottom)
+        }
+    }
+
+    /// Walk pairs from their common pin until the first divergence, even when
+    /// one path has an extra collinear vertex. Later crossings are not junctions.
+    static func junctions(_ paths: [[CGPoint]]) -> [CGPoint] {
+        var result: [CGPoint] = []
+        let paths = paths.map { path in
+            path.reduce(into: [CGPoint]()) { result, point in
+                if result.last != point { result.append(point) }
+            }
+        }
+        let pins = paths.flatMap { [$0.first, $0.last].compactMap { $0 } }
+        for i in paths.indices {
+            for j in paths.indices where j > i {
+                for pin in [paths[i].first, paths[i].last].compactMap({ $0 }) {
+                    guard paths[j].first == pin || paths[j].last == pin else { continue }
+                    let a = paths[i].first == pin ? paths[i] : Array(paths[i].reversed())
+                    let b = paths[j].first == pin ? paths[j] : Array(paths[j].reversed())
+                    var ai = 1, bi = 1, current = pin
+                    while ai < a.count && bi < b.count {
+                        let av = CGPoint(x:a[ai].x-current.x,y:a[ai].y-current.y)
+                        let bv = CGPoint(x:b[bi].x-current.x,y:b[bi].y-current.y)
+                        let same = (av.x == 0 && bv.x == 0 && av.y*bv.y > 0) ||
+                            (av.y == 0 && bv.y == 0 && av.x*bv.x > 0)
+                        guard same else {
+                            if !pins.contains(current) && !result.contains(current) { result.append(current) }
+                            break
+                        }
+                        let al = abs(av.x)+abs(av.y), bl = abs(bv.x)+abs(bv.y)
+                        current = al <= bl ? a[ai] : b[bi]
+                        if al <= bl { ai += 1 }; if bl <= al { bi += 1 }
+                    }
+                }
+            }
+        }
+        return result.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
+    }
+
     static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]]) -> [CGPoint] {
         func outward(_ p: CGPoint) -> CGFloat { bodies.contains { $0.minX == p.x && $0.midY == p.y } ? -1 : 1 }
+        let bounds = routingBounds(bodies)
+        func lead(_ pin: CGPoint) -> CGPoint {
+            guard let i = bodies.firstIndex(where: { ($0.minX == pin.x || $0.maxX == pin.x) && $0.midY == pin.y }) else {
+                return CGPoint(x:pin.x+outward(pin)*24,y:pin.y)
+            }
+            return CGPoint(x:outward(pin) < 0 ? bounds[i].minX : bounds[i].maxX,y:pin.y)
+        }
         let start = wire.start, end = wire.end
-        let s = CGPoint(x: start.x + outward(start)*20, y: start.y)
-        let e = CGPoint(x: end.x + outward(end)*20, y: end.y)
+        let s = lead(start), e = lead(end)
         var xs = [start.x, end.x, s.x, e.x], ys = [start.y,end.y]
-        for r in bodies { xs += [r.minX-20,r.maxX+20]; ys += [r.minY-20,r.maxY+20] }
+        for r in bounds { xs += [r.minX,r.maxX]; ys += [r.minY,r.maxY] }
         for p in occupied.flatMap({ $0 }) { xs += [p.x-12,p.x+12]; ys += [p.y-12,p.y+12] }
         xs = Array(Set(xs)).sorted(); ys = Array(Set(ys)).sorted()
-        func clear(_ a: CGPoint, _ b: CGPoint) -> Bool {
-            guard !bodies.contains(where: { intersectsInterior(a,b,$0) }) else { return false }
+        func clear(_ a: CGPoint, _ b: CGPoint, terminal: Bool = false) -> Bool {
+            guard !(terminal ? bodies : bounds).contains(where: { intersectsInterior(a,b,$0) }) else { return false }
             for path in occupied {
                 let shared: [CGPoint] = [start,end].filter { $0 == path.first || $0 == path.last }
                 for (c,d) in segments(path) where overlap(a,b,c,d) {
@@ -48,7 +109,7 @@ enum WireRouting {
             }
             return true
         }
-        guard clear(start,s), clear(e,end) else { return [] }
+        guard clear(start,s,terminal:true), clear(e,end,terminal:true) else { return [] }
         let width = xs.count, count = width * ys.count
         func point(_ i: Int) -> CGPoint { CGPoint(x: xs[i % width], y: ys[i / width]) }
         let source = ys.firstIndex(of:s.y)! * width + xs.firstIndex(of:s.x)!
@@ -81,6 +142,7 @@ enum WireRouting {
     }
     static func crossings(_ path: [CGPoint], others: [[CGPoint]]) -> [Crossing] {
         var result: [Crossing] = []
+        let branches = junctions([path] + others)
         for (i, pair) in segments(path).enumerated() {
             let (a,b) = pair
             guard a.x == b.x, a.y != b.y else { continue }
@@ -88,6 +150,7 @@ enum WireRouting {
                 for (c,d) in segments(other) where c.y == d.y && c.x != d.x {
                     guard a.x > min(c.x,d.x), a.x < max(c.x,d.x), c.y > min(a.y,b.y), c.y < max(a.y,b.y) else { continue }
                     let p = CGPoint(x:a.x,y:c.y)
+                    guard !branches.contains(p) else { continue }
                     let room = min(abs(p.y-a.y),abs(p.y-b.y))
                     let crossing = Crossing(point:p,segment:i,radius:room >= 7 ? 7 : 0)
                     if !result.contains(crossing) { result.append(crossing) }

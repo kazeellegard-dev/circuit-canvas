@@ -172,6 +172,18 @@ struct ContentView: View {
                             .accessibilityValue(pointValue(wireHops(index).map(\.point)))
                     }
                 }
+                Path { path in
+                    for point in WireRouting.junctions(wires.map(\.points)) {
+                        path.addEllipse(in: CGRect(x:point.x-5,y:point.y-5,width:10,height:10))
+                    }
+                }
+                .fill(.primary)
+                .allowsHitTesting(false)
+                .accessibilityRepresentation {
+                    Text("配線分岐")
+                        .accessibilityIdentifier("canvas-junctions")
+                        .accessibilityValue(pointValue(WireRouting.junctions(wires.map(\.points))))
+                }
                 ForEach(Array(wires.enumerated()), id: \.element.id) { index, wire in
                     ForEach(interiorSegments(wire.points), id: \.self) { segment in
                         segmentTarget(wire: wire, index: index, segment: segment)

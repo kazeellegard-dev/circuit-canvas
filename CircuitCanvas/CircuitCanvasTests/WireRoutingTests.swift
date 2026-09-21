@@ -38,10 +38,44 @@ struct WireRoutingTests {
                     let left = obstacles.contains { $0.minX == pin.x && $0.midY == pin.y }
                     #expect(pin.y == next.y)
                     #expect(left ? next.x < pin.x : next.x > pin.x)
+                    #expect(abs(next.x-pin.x) >= 24)
+                }
+                let padded = WireRouting.routingBounds(obstacles)
+                for (a,b) in WireRouting.segments(path).dropFirst().dropLast() {
+                    #expect(!padded.contains { WireRouting.intersectsInterior(a,b,$0) })
                 }
                 routes.append(path)
             }
         }
+    }
+
+    @Test func closeBodiesUseHalfGapForLeadsAndClearance() {
+        let obstacles = [CGRect(x:0,y:0,width:150,height:64),CGRect(x:180,y:0,width:150,height:64)]
+        let bounds = WireRouting.routingBounds(obstacles)
+        #expect(bounds[0].maxX == 165 && bounds[1].minX == 165)
+        let path = WireRouting.route(.init(start:p(150,32),end:p(180,32)),bodies:obstacles,occupied:[])
+        #expect(path == [p(150,32),p(180,32)])
+        let around = WireRouting.route(.init(start:p(150,32),end:p(330,32)),bodies:obstacles,occupied:[])
+        #expect(around[1] == p(165,32))
+        #expect(WireRouting.segments(around).dropFirst().dropLast().allSatisfy { a,b in
+            !bounds.contains { WireRouting.intersectsInterior(a,b,$0) }
+        })
+        let stacked = WireRouting.routingBounds([obstacles[0],obstacles[0].offsetBy(dx:0,dy:80)])
+        #expect(stacked[0].maxY == 72 && stacked[1].minY == 72)
+    }
+
+    @Test func junctionsDeduplicateMultipleBranchesAndExcludePinsAndCrossings() {
+        let a = [p(0,0),p(40,0),p(40,60),p(100,60)]
+        let b = [p(0,0),p(20,0),p(20,80),p(100,80)]
+        let c = [p(0,0),p(60,0),p(60,100),p(100,100)]
+        #expect(WireRouting.junctions([a,b,c]) == [p(20,0),p(40,0)])
+        #expect(WireRouting.junctions([a,b,c,Array(b.reversed())]) == [p(20,0),p(40,0)])
+        #expect(WireRouting.junctions([a,[p(0,0),p(0,80),p(100,80)]]).isEmpty)
+        #expect(WireRouting.junctions([a,[p(20,-20),p(20,20)]]).isEmpty)
+        #expect(WireRouting.junctions([a,a]).isEmpty)
+        let split = [p(0,0),p(10,0),p(20,0),p(20,80)]
+        #expect(WireRouting.junctions([a,split]) == [p(20,0)])
+        #expect(WireRouting.junctions([a,[p(0,0),p(10,0),p(10,0),p(20,0),p(20,80)]]) == [p(20,0)])
     }
 
     @Test func segmentDragIsPerpendicularAttachedAndCannotTunnelThroughBody() {
