@@ -38,7 +38,7 @@ struct ContentView: View {
     @State private var wires: [WireItem] = [
         .init(start: .init(x: 195, y: 160), end: .init(x: 295, y: 250)),
         .init(start: .init(x: 445, y: 250), end: .init(x: 545, y: 250)),
-        .init(start: .init(x: 195, y: 390), end: .init(x: 295, y: 275))
+        .init(start: .init(x: 195, y: 390), end: .init(x: 295, y: 250))
     ]
 
     private let library = ["DC/DC", "MCU", "CAN", "抵抗", "GND", "センサー", "汎用ブロック"]
