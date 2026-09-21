@@ -148,7 +148,7 @@ struct ContentView: View {
                             selectedNote = nil
                         }
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
+                            DragGesture(minimumDistance: 4)
                                 .onChanged { value in move(symbolID: symbol.id, by: value.translation) }
                                 .onEnded { _ in dragOrigins[symbol.id] = nil }
                         )
@@ -165,7 +165,7 @@ struct ContentView: View {
                     )
                         .position(note.position)
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
+                            DragGesture(minimumDistance: 4)
                                 .onChanged { value in move(noteID: note.id, by: value.translation) }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
                         )
