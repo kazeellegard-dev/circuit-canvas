@@ -11,6 +11,7 @@
 5. **最後に** `CircuitCanvas/docs/qa/loop/verdict.json` を書く。形式は `CircuitCanvas/docs/qa/loop/verdict.schema.json` に従う。
    - 失敗が 1 件でもあれば `status: "fail"`、すべて成功なら `"pass"`。
    - シミュレーターを操作できないなど、環境が原因で検証できないときは `"blocked"`（推測で `pass` にしない）。
+   - この環境では、タップ・スワイプ・ピンチなどの画面操作ができない可能性が高い。操作できない項目は `items` で「確認不能」にする。失敗が 0 件でも「確認不能」が残るなら `status` は `"blocked"`（`pass` にしない）。
    - `failures[].evidence` は、リポジトリルートからの相対パスにする。
 
 ## 守ること
