@@ -417,6 +417,49 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testShortHorizontalDiagonalDragAndReturnRecomputesCrossings() {
+        let app = XCUIApplication(); app.launch()
+        func drag(_ id: String, _ dx: CGFloat, _ dy: CGFloat) {
+            let target = element(app,id)
+            XCTAssertTrue(target.isHittable)
+            let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
+        }
+        drag("wire-0-segment-1",-6,0)
+        let before = routePoints(app,2)
+        let viewport = element(app,"circuit-canvas").value as? String
+        let symbols = ["24 V → 5 V","Main MCU","CAN","Temperature"].map {
+            element(app,"symbol-\($0)").value as? String
+        }
+        drag("wire-2-segment-2",18,-97)
+        let after = routePoints(app,2)
+        XCTAssertEqual(after.count,before.count)
+        for index in before.indices {
+            XCTAssertEqual(after[index].x,before[index].x,accuracy:0.1)
+            XCTAssertEqual(after[index].y,before[index].y - ([2,3].contains(index) ? 97 : 0),accuracy:1)
+        }
+        let hops = coordinates(element(app,"wire-0-hops"))
+        XCTAssertEqual(hops.count,2)
+        if hops.count == 2 {
+            XCTAssertEqual(hops[0],269,accuracy:1)
+            XCTAssertEqual(hops[1],205,accuracy:1)
+        }
+        drag("wire-2-segment-2",-18,97)
+        let restored = routePoints(app,2)
+        for index in before.indices {
+            XCTAssertEqual(restored[index].x,before[index].x,accuracy:0.1)
+            XCTAssertEqual(restored[index].y,before[index].y,accuracy:1)
+        }
+        XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
+        XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
+        XCTAssertEqual(["24 V → 5 V","Main MCU","CAN","Temperature"].map {
+            element(app,"symbol-\($0)").value as? String
+        },symbols)
+        XCTAssertEqual(coordinates(element(app,"wire-2")),[195,390,295,250])
+        assertWireCount(app,"3")
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

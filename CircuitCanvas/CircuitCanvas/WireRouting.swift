@@ -96,6 +96,27 @@ enum WireRouting {
         }
         return result
     }
+    /// Resolve ambiguous neighboring hit targets by distance to the visible line.
+    /// Called only after a segment target accepts a drag, never for blank canvas.
+    static func nearestInteriorSegment(to point: CGPoint, paths: [[CGPoint]]) -> (wire: Int, segment: Int)? {
+        var nearest: (wire: Int, segment: Int)?
+        var distance = CGFloat.infinity
+        for (wire, path) in paths.enumerated() where path.count > 3 {
+            for segment in 1..<(path.count-2) {
+                let a = path[segment], b = path[segment+1]
+                guard a != b else { continue }
+                let x = min(max(point.x, min(a.x,b.x)), max(a.x,b.x))
+                let y = min(max(point.y, min(a.y,b.y)), max(a.y,b.y))
+                let squared = (point.x-x)*(point.x-x) + (point.y-y)*(point.y-y)
+                if squared < distance {
+                    distance = squared
+                    nearest = (wire, segment)
+                }
+            }
+        }
+        return nearest
+    }
+
     static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect]) -> [CGPoint] {
         guard segment > 0, segment+1 < path.count-1 else { return path }
         let horizontal = path[segment].y == path[segment+1].y

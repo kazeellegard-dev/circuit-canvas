@@ -57,6 +57,32 @@ struct WireRoutingTests {
         #expect(h.first == horizontal.first && h.last == horizontal.last)
     }
 
+    @Test func shortHorizontalTouchChoosesVisibleLineAndMovesOnlyItsY() throws {
+        let path = [p(195,390),p(263,390),p(263,302),p(275,302),p(275,250),p(295,250)]
+        // The neighboring vertical targets are only 6pt from the touch.
+        for x in [CGFloat(268),269,270] {
+            let hit = try #require(WireRouting.nearestInteriorSegment(to:p(x,302),paths:[path]))
+            #expect(hit.wire == 0 && hit.segment == 2)
+            let moved = WireRouting.moved(path,segment:hit.segment,delta:-97,bodies:bodies)
+            #expect(moved == [p(195,390),p(263,390),p(263,205),p(275,205),p(275,250),p(295,250)])
+        }
+        #expect(WireRouting.nearestInteriorSegment(to:p(275,270),paths:[path])?.segment == 3)
+        #expect(WireRouting.nearestInteriorSegment(to:p(263,350),paths:[path])?.segment == 1)
+        #expect(WireRouting.nearestInteriorSegment(to:p(50,0),paths:[[p(0,0),p(100,0)]]) == nil)
+    }
+
+    @Test func shortHorizontalDragCreatesAndRemovesCrossingOnOtherWire() throws {
+        let vertical = [p(195,160),p(269,160),p(269,250),p(295,250)]
+        let horizontal = [p(195,390),p(263,390),p(263,302),p(275,302),p(275,250),p(295,250)]
+        let hit = try #require(WireRouting.nearestInteriorSegment(to:p(269,302),paths:[vertical,horizontal]))
+        #expect(hit.wire == 1 && hit.segment == 2)
+        let moved = WireRouting.moved(horizontal,segment:hit.segment,delta:-97,bodies:bodies)
+        #expect(WireRouting.crossings(vertical,others:[moved]) == [.init(point:p(269,205),segment:1,radius:7)])
+        let restored = WireRouting.moved(moved,segment:hit.segment,delta:97,bodies:bodies)
+        #expect(restored == horizontal)
+        #expect(WireRouting.crossings(vertical,others:[restored]).isEmpty)
+    }
+
     @Test func manualSegmentPositionSurvivesEndpointMovement() {
         let path = [p(195,160),p(260,160),p(260,250),p(295,250)]
         let attached = WireRouting.reattach(path,start:p(210,180),end:p(320,280))

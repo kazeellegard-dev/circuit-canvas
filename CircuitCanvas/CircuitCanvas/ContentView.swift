@@ -23,7 +23,12 @@ struct ContentView: View {
     @State private var pendingWireStart: CGPoint?
     @State private var dragOrigins: [UUID: CGPoint] = [:]
     @State private var noteDragOrigins: [UUID: CGPoint] = [:]
-    @State private var segmentDragOrigins: [UUID: [CGPoint]] = [:]
+    private struct SegmentDrag {
+        let wireID: UUID
+        let segment: Int
+        let origin: [CGPoint]
+    }
+    @State private var segmentDrag: SegmentDrag?
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
     @State private var canvasScale: CGFloat = 1
@@ -392,8 +397,8 @@ struct ContentView: View {
     private func segmentTarget(wire: WireItem, index: Int, segment: Int) -> some View {
         let a = wire.points[segment], b = wire.points[segment+1]
         let horizontal = a.y == b.y
-        // Leave space at corners so an adjacent segment's 16pt-wide target
-        // cannot capture a drag starting at the center of a short segment.
+        // Reduce target overlap at corners. Touch delivery can still favor a
+        // neighbor, so the gesture resolves the nearest visible segment below.
         let length = horizontal ? abs(a.x-b.x) : abs(a.y-b.y)
         let targetLength = max(1, length - min(16, length / 2))
         return Color.clear
@@ -404,15 +409,26 @@ struct ContentView: View {
             .accessibilityIdentifier("wire-\(index)-segment-\(segment)")
             .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                 .onChanged { value in
-                    guard tool == .select, let i = wires.firstIndex(where: { $0.id == wire.id }) else { return }
-                    let origin = segmentDragOrigins[wire.id] ?? wires[i].points
-                    segmentDragOrigins[wire.id] = origin
+                    guard tool == .select else { return }
+                    if segmentDrag == nil {
+                        // SwiftUI can deliver touches near a small target to its
+                        // neighbor. Resolve the actual line from the initial touch,
+                        // then retain that choice for the entire gesture.
+                        guard let hit = WireRouting.nearestInteriorSegment(
+                            to: canvasPoint(from: value.startLocation), paths: wires.map(\.points)
+                        ) else { return }
+                        segmentDrag = SegmentDrag(wireID: wires[hit.wire].id,
+                                                  segment: hit.segment, origin: wires[hit.wire].points)
+                    }
+                    guard let drag = segmentDrag,
+                          let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
+                    let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
                     let delta = (horizontal ? value.translation.height : value.translation.width) / canvasScale
-                    wires[i].points = WireRouting.moved(origin, segment: segment, delta: delta, bodies: bodies)
+                    wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies)
                     wires[i].manual = true
                     wires[i].manualPoints = wires[i].points
                 }
-                .onEnded { _ in segmentDragOrigins[wire.id] = nil })
+                .onEnded { _ in segmentDrag = nil })
             .allowsHitTesting(tool == .select)
     }
     private func wirePath(_ points: [CGPoint], hops: [WireRouting.Crossing]) -> Path {
