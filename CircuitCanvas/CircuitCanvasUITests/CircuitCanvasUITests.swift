@@ -375,6 +375,26 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testShortHorizontalSegmentDragDoesNotSelectAdjacentVerticalSegment() {
+        let app = XCUIApplication(); app.launch()
+        let before = routePoints(app,2)
+        let viewport = element(app,"circuit-canvas").value as? String
+        let endpoints = coordinates(element(app,"wire-2"))
+        let source = element(app,"wire-2-segment-2")
+            .coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
+        let after = routePoints(app,2)
+        XCTAssertEqual(after.count,before.count)
+        for index in before.indices {
+            XCTAssertEqual(after[index].x,before[index].x,accuracy:0.1)
+            XCTAssertEqual(after[index].y,before[index].y - ([2,3].contains(index) ? 97 : 0),accuracy:1)
+        }
+        XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
+        XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
+        assertWireCount(app,"3")
+    }
+
+    @MainActor
     func testCrossingMetadataAppearsAndDisappearsWithoutChangingEndpoints() {
         let app = XCUIApplication(); app.launch()
         let endpoint = coordinates(element(app,"wire-0"))
@@ -383,7 +403,9 @@ final class CircuitCanvasUITests: XCTestCase {
             source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
         }
         drag("wire-0-segment-1",-6,0)
+        XCTAssertEqual(routePoints(app,0)[1].x,269,accuracy:1)
         drag("wire-2-segment-2",0,-97)
+        XCTAssertEqual(routePoints(app,2)[2].y,205,accuracy:1)
         let hops = element(app,"wire-0-hops")
         XCTAssertFalse((hops.value as? String ?? "").isEmpty)
         XCTAssertEqual(coordinates(element(app,"wire-0")),endpoint)

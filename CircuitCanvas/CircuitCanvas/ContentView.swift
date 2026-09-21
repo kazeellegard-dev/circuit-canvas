@@ -392,8 +392,12 @@ struct ContentView: View {
     private func segmentTarget(wire: WireItem, index: Int, segment: Int) -> some View {
         let a = wire.points[segment], b = wire.points[segment+1]
         let horizontal = a.y == b.y
+        // Leave space at corners so an adjacent segment's 16pt-wide target
+        // cannot capture a drag starting at the center of a short segment.
+        let length = horizontal ? abs(a.x-b.x) : abs(a.y-b.y)
+        let targetLength = max(1, length - min(16, length / 2))
         return Color.clear
-            .frame(width: horizontal ? max(1,abs(a.x-b.x)) : 16, height: horizontal ? 16 : max(1,abs(a.y-b.y)))
+            .frame(width: horizontal ? targetLength : 16, height: horizontal ? 16 : targetLength)
             .contentShape(Rectangle())
             .position(x: (a.x+b.x)/2, y: (a.y+b.y)/2)
             .accessibilityElement().accessibilityLabel("配線の線分")
