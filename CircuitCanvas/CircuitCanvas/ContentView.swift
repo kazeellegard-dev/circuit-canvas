@@ -138,7 +138,15 @@ struct ContentView: View {
                         path.addLine(to: .init(x: middleX, y: wire.start.y)); path.addLine(to: .init(x: middleX, y: wire.end.y)); path.addLine(to: wire.end)
                         context.stroke(path, with: .color(.primary), lineWidth: 2)
                     }
-                }.allowsHitTesting(false)
+                }
+                .allowsHitTesting(false)
+                .accessibilityChildren {
+                    ForEach(Array(wires.enumerated()), id: \.element.id) { index, wire in
+                        Text("配線 \(index + 1)")
+                            .accessibilityIdentifier("wire-\(index)")
+                            .accessibilityValue("\(wire.start.x),\(wire.start.y),\(wire.end.x),\(wire.end.y)")
+                    }
+                }
                 ForEach(symbols) { symbol in
                     SymbolCard(
                         symbol: symbol,
@@ -354,7 +362,9 @@ private struct SymbolCard: View {
             .accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")")
             .accessibilityIdentifier("symbol-\(symbol.title)")
 
-            HStack { pin(0); Spacer(); pin(1) }
+            // Keep the visible pin centers at the same ±75pt used by pins(for:).
+            pin(0).offset(x: -75)
+            pin(1).offset(x: 75)
         }
         .frame(width: 150, height: 64)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
@@ -372,6 +382,8 @@ private struct SymbolCard: View {
         .buttonStyle(.plain)
         .accessibilityLabel(index == 0 ? "左ピン" : "右ピン")
         .accessibilityIdentifier("symbol-\(symbol.title)-pin-\(index)")
+        .accessibilityValue("\(symbol.position.x + (index == 0 ? -75 : 75)),\(symbol.position.y)")
+        .accessibilityAddTraits(wireStartPinIndex == index ? .isSelected : [])
     }
 }
 
