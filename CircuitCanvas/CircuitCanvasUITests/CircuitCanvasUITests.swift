@@ -374,6 +374,64 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(coordinates(element(app,"wire-0")),[195,160,295,250])
     }
 
+    // Start through viewport coordinates, independently of the tiny accessibility
+    // target. Both sides of the short line must work when the background gets input.
+    @MainActor
+    func testShortLineFromViewportDoesNotPan() {
+        assertShortLineFromViewport(touchOffset: -1, diagonal: 0, returnToOrigin: false)
+    }
+
+    @MainActor
+    func testShortLineFromViewportUpdatesCrossing() {
+        assertShortLineFromViewport(touchOffset: 1, diagonal: 0, returnToOrigin: true)
+    }
+
+    @MainActor
+    func testShortLineFromViewportDiagonalReturnKeepsCanvasFixed() {
+        assertShortLineFromViewport(touchOffset: 0, diagonal: 18, returnToOrigin: true)
+    }
+
+    @MainActor
+    private func assertShortLineFromViewport(touchOffset: CGFloat, diagonal: CGFloat, returnToOrigin: Bool) {
+        let app = XCUIApplication(); app.launch()
+        let vertical = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        vertical.press(forDuration:0.2,thenDragTo:vertical.withOffset(CGVector(dx:-6,dy:0)))
+        let canvas = element(app,"circuit-canvas")
+        let viewport = canvas.value as? String
+        let before = routePoints(app,2)
+        let endpoints = coordinates(element(app,"wire-2"))
+        let origin = canvas.coordinate(withNormalizedOffset:.zero)
+        let source = origin.withOffset(CGVector(dx:(before[2].x+before[3].x)/2+touchOffset,dy:before[2].y))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:diagonal,dy:-97)))
+        let after = routePoints(app,2)
+        XCTAssertEqual(after.count,before.count)
+        for i in before.indices {
+            XCTAssertEqual(after[i].x,before[i].x,accuracy:1)
+            XCTAssertEqual(after[i].y,before[i].y - ([2,3].contains(i) ? 97 : 0),accuracy:1)
+        }
+        XCTAssertEqual(coordinates(element(app,"wire-0-hops")),[269,205])
+        if returnToOrigin {
+            let back = origin.withOffset(CGVector(dx:(after[2].x+after[3].x)/2,dy:after[2].y))
+            back.press(forDuration:0.2,thenDragTo:back.withOffset(CGVector(dx:-diagonal,dy:97)))
+            XCTAssertEqual(routePoints(app,2),before)
+            XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
+        }
+        XCTAssertEqual(canvas.value as? String,viewport)
+        XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
+        assertWireCount(app,"3")
+    }
+
+    @MainActor
+    func testBlankCanvasDragCrossingLineRemainsPan() {
+        let app = XCUIApplication(); app.launch()
+        let before = routePoints(app,2)
+        let canvas = element(app,"circuit-canvas")
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:269,dy:420))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
+        XCTAssertEqual(routePoints(app,2),before)
+        XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=0, offsetY=-97")
+    }
+
     @MainActor
     func testShortHorizontalSegmentDragDoesNotSelectAdjacentVerticalSegment() {
         let app = XCUIApplication(); app.launch()

@@ -29,6 +29,7 @@ struct ContentView: View {
         let origin: [CGPoint]
     }
     @State private var segmentDrag: SegmentDrag?
+    @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
     @State private var canvasScale: CGFloat = 1
@@ -323,12 +324,26 @@ struct ContentView: View {
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
             .onChanged { value in
+                // Very short transparent targets can deliver the touch to this
+                // background. Resolve once at touch-down and retain that choice.
+                if segmentDrag == nil && !isPanningCanvas {
+                    beginSegmentDrag(at: value.startLocation, translation: value.translation)
+                    isPanningCanvas = segmentDrag == nil
+                }
+                if segmentDrag != nil {
+                    updateSegmentDrag(translation: value.translation)
+                    return
+                }
                 canvasOffset = boundedCanvasOffset(
                     CGSize(width: canvasPanOrigin.width + value.translation.width, height: canvasPanOrigin.height + value.translation.height),
                     in: viewportSize
                 )
             }
-            .onEnded { _ in canvasPanOrigin = canvasOffset }
+            .onEnded { _ in
+                canvasPanOrigin = canvasOffset
+                segmentDrag = nil
+                isPanningCanvas = false
+            }
     }
     private var canvasZoomGesture: some Gesture {
         MagnificationGesture()
@@ -410,27 +425,31 @@ struct ContentView: View {
             .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                 .onChanged { value in
                     guard tool == .select else { return }
-                    if segmentDrag == nil {
-                        // SwiftUI can deliver touches near a small target to its
-                        // neighbor. Resolve the actual line from the initial touch,
-                        // then retain that choice for the entire gesture.
-                        guard let hit = WireRouting.nearestInteriorSegment(
-                            to: canvasPoint(from: value.startLocation), paths: wires.map(\.points)
-                        ) else { return }
-                        segmentDrag = SegmentDrag(wireID: wires[hit.wire].id,
-                                                  segment: hit.segment, origin: wires[hit.wire].points)
-                    }
-                    guard let drag = segmentDrag,
-                          let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
-                    let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
-                    let delta = (horizontal ? value.translation.height : value.translation.width) / canvasScale
-                    wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies)
-                    wires[i].manual = true
-                    wires[i].manualPoints = wires[i].points
+                    beginSegmentDrag(at: value.startLocation, translation: value.translation)
+                    updateSegmentDrag(translation: value.translation)
                 }
                 .onEnded { _ in segmentDrag = nil })
             .allowsHitTesting(tool == .select)
     }
+    private func beginSegmentDrag(at viewportPoint: CGPoint, translation: CGSize) {
+        guard tool == .select, segmentDrag == nil,
+              let hit = WireRouting.nearestInteriorSegment(
+                to: canvasPoint(from: viewportPoint), paths: wires.map(\.points), maximumDistance: 8, translation: translation
+              ) else { return }
+        segmentDrag = SegmentDrag(wireID: wires[hit.wire].id,
+                                  segment: hit.segment, origin: wires[hit.wire].points)
+    }
+
+    private func updateSegmentDrag(translation: CGSize) {
+        guard let drag = segmentDrag,
+              let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
+        let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
+        let delta = (horizontal ? translation.height : translation.width) / canvasScale
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies)
+        wires[i].manual = true
+        wires[i].manualPoints = wires[i].points
+    }
+
     private func wirePath(_ points: [CGPoint], hops: [WireRouting.Crossing]) -> Path {
         var path = Path()
         guard let first = points.first else { return path }

@@ -83,6 +83,26 @@ struct WireRoutingTests {
         #expect(WireRouting.crossings(vertical,others:[restored]).isEmpty)
     }
 
+    @Test func crossingTouchUsesPerpendicularMotionForReturnDrag() throws {
+        let vertical = [p(195,160),p(269,160),p(269,250),p(295,250)]
+        let horizontal = [p(195,390),p(263,390),p(263,205),p(275,205),p(275,250),p(295,250)]
+        let hit = try #require(WireRouting.nearestInteriorSegment(to:p(269,205),paths:[vertical,horizontal],maximumDistance:8,translation:CGSize(width:-1,height:5)))
+        #expect(hit.wire == 1 && hit.segment == 2)
+        let side = try #require(WireRouting.nearestInteriorSegment(to:p(269,205),paths:[vertical,horizontal],maximumDistance:8,translation:CGSize(width:5,height:1)))
+        #expect(side.wire == 0 && side.segment == 1)
+        let restored = WireRouting.moved(horizontal,segment:hit.segment,delta:97,bodies:bodies)
+        #expect(restored[2].y == 302 && restored[3].y == 302)
+        #expect(WireRouting.crossings(vertical,others:[restored]).isEmpty)
+    }
+
+    @Test func backgroundHitResolutionRejectsBlankSpaceAndTerminalLeads() {
+        let path = [p(195,390),p(263,390),p(263,302),p(275,302),p(275,250),p(295,250)]
+        #expect(WireRouting.nearestInteriorSegment(to:p(269,302),paths:[path],maximumDistance:8)?.segment == 2)
+        #expect(WireRouting.nearestInteriorSegment(to:p(240,330),paths:[path],maximumDistance:8) == nil)
+        #expect(WireRouting.nearestInteriorSegment(to:p(220,390),paths:[path],maximumDistance:8) == nil)
+        #expect(WireRouting.nearestInteriorSegment(to:p(300,302),paths:[path],maximumDistance:8) == nil)
+    }
+
     @Test func manualSegmentPositionSurvivesEndpointMovement() {
         let path = [p(195,160),p(260,160),p(260,250),p(295,250)]
         let attached = WireRouting.reattach(path,start:p(210,180),end:p(320,280))

@@ -97,10 +97,11 @@ enum WireRouting {
         return result
     }
     /// Resolve ambiguous neighboring hit targets by distance to the visible line.
-    /// Called only after a segment target accepts a drag, never for blank canvas.
-    static func nearestInteriorSegment(to point: CGPoint, paths: [[CGPoint]]) -> (wire: Int, segment: Int)? {
+    /// A finite maximum distance lets the canvas distinguish lines from blank space.
+    static func nearestInteriorSegment(to point: CGPoint, paths: [[CGPoint]], maximumDistance: CGFloat = .infinity, translation: CGSize = .zero) -> (wire: Int, segment: Int)? {
         var nearest: (wire: Int, segment: Int)?
         var distance = CGFloat.infinity
+        var perpendicularMotion: CGFloat = -1
         for (wire, path) in paths.enumerated() where path.count > 3 {
             for segment in 1..<(path.count-2) {
                 let a = path[segment], b = path[segment+1]
@@ -108,7 +109,12 @@ enum WireRouting {
                 let x = min(max(point.x, min(a.x,b.x)), max(a.x,b.x))
                 let y = min(max(point.y, min(a.y,b.y)), max(a.y,b.y))
                 let squared = (point.x-x)*(point.x-x) + (point.y-y)*(point.y-y)
-                if squared < distance {
+                // At an exact crossing both lines are equally close. Prefer the
+                // line perpendicular to the initial movement, then lock it upstream.
+                let motion = a.y == b.y ? abs(translation.height) : abs(translation.width)
+                if squared <= maximumDistance * maximumDistance &&
+                    (squared < distance || (squared == distance && motion > perpendicularMotion)) {
+                    perpendicularMotion = motion
                     distance = squared
                     nearest = (wire, segment)
                 }
