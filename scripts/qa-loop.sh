@@ -2,7 +2,7 @@
 # Codex (実装) -> xcodebuild test (ゲート) -> Claude Code (QA) -> verdict.json -> 失敗なら Codex へ戻す
 #
 # 使い方:
-#   scripts/qa-loop.sh [--dry-run] [--max-iter N] [--allow-staged] TASK_FILE
+#   scripts/qa-loop.sh [--dry-run] [--max-iter N] [--allow-staged] [--keep-verdict] TASK_FILE
 #
 # 終了コード: 0=pass / 1=反復上限に到達 / 2=事前チェック失敗・blocked・保護違反
 #
@@ -30,6 +30,7 @@ PROTECTED=(CircuitCanvas/CircuitCanvas CircuitCanvas/CircuitCanvasTests CircuitC
 DRY_RUN=0
 MAX_ITER=3
 ALLOW_STAGED=0
+KEEP_VERDICT=0
 TASK_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1 ;;
     --max-iter) MAX_ITER="$2"; shift ;;
     --allow-staged) ALLOW_STAGED=1 ;;
+    --keep-verdict) KEEP_VERDICT=1 ;; # 前回の verdict.json（fail）を引き継いで再開する
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     -*) echo "不明なオプション: $1" >&2; exit 2 ;;
     *) TASK_FILE="$1" ;;
@@ -82,7 +84,7 @@ fi
 RUN_DIR="$LOOP_DIR/runs/$(date +%Y%m%d-%H%M%S)-$TASK_NAME"
 mkdir -p "$RUN_DIR"
 log "run dir: $RUN_DIR  (max-iter=$MAX_ITER, dry-run=$DRY_RUN)"
-rm -f "$VERDICT"
+[[ $KEEP_VERDICT -eq 1 ]] || rm -f "$VERDICT"
 
 run() { # 実行内容を表示し、dry-run では実行しない
   if [[ $DRY_RUN -eq 1 ]]; then echo "  [dry-run] $1 ...（プロンプトは runs/ 配下のファイルを参照）"; return 0; fi
@@ -114,6 +116,16 @@ code_fingerprint() { # コード変更のみ（HEAD は含めない）
 write_gate_failure_verdict() { # $1=ログパス
   local tail_txt
   tail_txt="$(tail -n 40 "$1" | tr '\n' ' ' | cut -c1-1500)"
+  # 失敗したテストの詳細（アサーション文）を xcresult から取り出す。ビルドエラーなら error: 行を使う。
+  local xcr detail
+  xcr="$(grep -A1 'Test session results' "$1" | grep -o '/.*\.xcresult' | tail -1 || true)"
+  detail=""
+  if [[ -n "$xcr" && -d "$xcr" ]]; then
+    detail="$(xcrun xcresulttool get test-results summary --path "$xcr" 2>/dev/null \
+      | jq -r '[.testFailures[]? | "\(.testIdentifierString): \(.failureText)"] | join(" | ")' 2>/dev/null || true)"
+  fi
+  [[ -z "$detail" ]] && detail="$(grep -E 'error:' "$1" | head -10 | tr '\n' ' ' | cut -c1-1500 || true)"
+  [[ -n "$detail" ]] && tail_txt="$detail"
   jq -n --arg task "$TASK_NAME" --arg commit "$(git rev-parse --short HEAD)" --arg tail "$tail_txt" --arg log "${1#$REPO_ROOT/}" '{
     task:$task, commit:$commit, status:"fail", checked_at:(now|todate),
     environment:"xcodebuild test (gate)", items:[],
