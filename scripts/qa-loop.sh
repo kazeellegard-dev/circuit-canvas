@@ -193,11 +193,11 @@ for ((i = 1; i <= MAX_ITER; i++)); do
   jq -e '.status and (.failures|type=="array") and .report' "$VERDICT" >/dev/null || die "verdict.json の形式が不正です"
   cp "$VERDICT" "$RUN_DIR/iter$i-verdict.json"
   STATUS="$(jq -r .status "$VERDICT")"
-  log "verdict: $STATUS（失敗 $(jq '.failures|length' "$VERDICT") 件）"
+  log "verdict: ${STATUS}（失敗 $(jq '.failures|length' "$VERDICT") 件）"
 
   case "$STATUS" in
-    pass) notify "pass（$TASK_NAME, iter $i）"; log "完了: pass"; exit 0 ;;
-    blocked) notify "blocked（$TASK_NAME）"; die "QA が環境要因で検証できません。$(jq -r .report "$VERDICT") を確認してください" ;;
+    pass) notify "pass（${TASK_NAME}, iter ${i}）"; log "完了: pass"; exit 0 ;;
+    blocked) notify "blocked（${TASK_NAME}）"; die "QA が環境要因で検証できません。$(jq -r .report "$VERDICT") を確認してください" ;;
     fail) ;; # 次のイテレーションで Codex に渡す
     *) die "不明な status: $STATUS" ;;
   esac
