@@ -11,7 +11,7 @@ private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
 private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var icon: String; var position: CGPoint }
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint? }
-private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint }
+private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var pendingWireStart: CGPoint?
     @State private var dragOrigins: [UUID: CGPoint] = [:]
     @State private var noteDragOrigins: [UUID: CGPoint] = [:]
+    @State private var segmentDragOrigins: [UUID: [CGPoint]] = [:]
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
     @State private var canvasScale: CGFloat = 1
@@ -55,6 +56,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Circuit Canvas")
+            .onAppear { reroute() }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil }
@@ -110,6 +112,14 @@ struct ContentView: View {
             .coordinateSpace(name: "editorViewport")
             .simultaneousGesture(canvasZoomGesture)
             .clipped()
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
+                    else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
+                    else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary)を配置") }
+                    else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
+                }.padding(16).allowsHitTesting(false)
+            }
             .overlay(alignment: .topTrailing) {
                 zoomIndicator
                     .padding(12)
@@ -132,11 +142,14 @@ struct ContentView: View {
                 Grid().allowsHitTesting(false)
                 Canvas { context, _ in
                     for note in notes { if let anchor = note.anchor { var path = Path(); path.move(to: note.position); path.addLine(to: anchor); context.stroke(path, with: .color(.secondary), style: .init(lineWidth: 1, dash: [4, 4])) } }
-                    for wire in wires {
-                        var path = Path(); path.move(to: wire.start)
-                        let middleX = (wire.start.x + wire.end.x) / 2
-                        path.addLine(to: .init(x: middleX, y: wire.start.y)); path.addLine(to: .init(x: middleX, y: wire.end.y)); path.addLine(to: wire.end)
-                        context.stroke(path, with: .color(.primary), lineWidth: 2)
+                    for (index, wire) in wires.enumerated() {
+                        let hops = wireHops(index)
+                        context.stroke(wirePath(wire.points, hops: hops), with: .color(.primary), lineWidth: 2)
+                        // Near corners a semicircle cannot fit: show a small hollow crossing marker.
+                        for hop in hops where hop.radius == 0 {
+                            let rect = CGRect(x: hop.point.x-3, y: hop.point.y-3, width: 6, height: 6)
+                            context.stroke(Path(ellipseIn: rect), with: .color(.primary), lineWidth: 1)
+                        }
                     }
                 }
                 .allowsHitTesting(false)
@@ -145,6 +158,17 @@ struct ContentView: View {
                         Text("配線 \(index + 1)")
                             .accessibilityIdentifier("wire-\(index)")
                             .accessibilityValue("\(wire.start.x),\(wire.start.y),\(wire.end.x),\(wire.end.y)")
+                        Text("配線経路 \(index + 1)")
+                            .accessibilityIdentifier("wire-\(index)-points")
+                            .accessibilityValue(pointValue(wire.points))
+                        Text("配線交差 \(index + 1)")
+                            .accessibilityIdentifier("wire-\(index)-hops")
+                            .accessibilityValue(pointValue(wireHops(index).map(\.point)))
+                    }
+                }
+                ForEach(Array(wires.enumerated()), id: \.element.id) { index, wire in
+                    ForEach(interiorSegments(wire.points), id: \.self) { segment in
+                        segmentTarget(wire: wire, index: index, segment: segment)
                     }
                 }
                 ForEach(symbols) { symbol in
@@ -188,10 +212,7 @@ struct ContentView: View {
                         )
                         .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { linkingNote = note.id } }
                 }
-                if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
-                if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary)を配置") }
-                if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
-                if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
+
             }
     }
 
@@ -203,7 +224,7 @@ struct ContentView: View {
                     selectWirePin(pin)
                 }
                 else if tool == .note { notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
-                else if tool == .symbol { symbols.append(.init(title: selectedLibrary, icon: icon(for: selectedLibrary), position: point)); tool = .select }
+                else if tool == .symbol { symbols.append(.init(title: selectedLibrary, icon: icon(for: selectedLibrary), position: point)); tool = .select; reroute() }
                 else { selectedNote = nil; selectedSymbol = nil }
             }
     }
@@ -247,11 +268,15 @@ struct ContentView: View {
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
             guard start.distance(to: pin) >= 1 else { return }
+            guard !symbols.contains(where: { symbol in
+                let endpoints = pins(for: symbol)
+                return endpoints.contains(start) && endpoints.contains(pin)
+            }) else { return }
             let alreadyExists = wires.contains { wire in
                 (wire.start.distance(to: start) < 1 && wire.end.distance(to: pin) < 1) ||
                 (wire.start.distance(to: pin) < 1 && wire.end.distance(to: start) < 1)
             }
-            if !alreadyExists { wires.append(.init(start: start, end: pin)) }
+            if !alreadyExists { wires.append(.init(start: start, end: pin)); reroute() }
             pendingWireStart = nil
             tool = .select
         } else {
@@ -283,7 +308,7 @@ struct ContentView: View {
             symbolPins.contains { pin in wire.start.distance(to: pin) < 1 || wire.end.distance(to: pin) < 1 }
         }
         selectedSymbol = nil
-        symbols.removeAll { $0.id == id }
+        symbols.removeAll { $0.id == id }; reroute()
     }
     private func removeNote(_ id: UUID) {
         selectedNote = nil
@@ -332,6 +357,7 @@ struct ContentView: View {
             }
         }
         _ = oldPosition
+        reroute()
     }
     private func move(noteID: UUID, by translation: CGSize) {
         guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
@@ -343,7 +369,65 @@ struct ContentView: View {
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
     private func isConnected(_ symbol: SymbolItem) -> Bool { pins(for: symbol).contains { pin in wires.contains { $0.start.distance(to: pin) < 1 || $0.end.distance(to: pin) < 1 } } }
     private func icon(for name: String) -> String { ["DC/DC": "bolt.fill", "MCU": "cpu", "CAN": "arrow.left.and.right", "抵抗": "minus", "GND": "arrow.down.to.line", "センサー": "sensor.tag.radiowaves.forward", "汎用ブロック": "square.dashed"][name] ?? "square.dashed" }
-    private func hint(_ icon: String, _ text: String) -> some View { VStack { Label(text, systemImage: icon).font(.footnote.weight(.medium)).padding(10).background(.thinMaterial, in: Capsule()); Spacer() }.padding().allowsHitTesting(false) }
+    private func hint(_ icon: String, _ text: String) -> some View {
+        Label(text, systemImage: icon).font(.footnote.weight(.medium)).padding(10)
+            .background(.thinMaterial, in: Capsule()).accessibilityIdentifier("operation-hint")
+    }
+    private var bodies: [CGRect] { symbols.map { CGRect(x: $0.position.x-75, y: $0.position.y-32, width: 150, height: 64) } }
+    private func reroute() {
+        var occupied = wires.filter(\.manual).map { WireRouting.reattach($0.manualPoints, start: $0.start, end: $0.end) }
+        for i in wires.indices {
+            if wires[i].manual { wires[i].points = WireRouting.reattach(wires[i].manualPoints, start: wires[i].start, end: wires[i].end) }
+            else {
+                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end), bodies: bodies, occupied: occupied)
+                occupied.append(wires[i].points)
+            }
+        }
+    }
+    private func pointValue(_ points: [CGPoint]) -> String { points.map { "\($0.x),\($0.y)" }.joined(separator: ";") }
+    private func interiorSegments(_ points: [CGPoint]) -> [Int] { points.count > 3 ? Array(1..<(points.count-2)) : [] }
+    private func wireHops(_ index: Int) -> [WireRouting.Crossing] {
+        WireRouting.crossings(wires[index].points, others: wires.enumerated().filter { $0.offset != index }.map { $0.element.points })
+    }
+    private func segmentTarget(wire: WireItem, index: Int, segment: Int) -> some View {
+        let a = wire.points[segment], b = wire.points[segment+1]
+        let horizontal = a.y == b.y
+        return Color.clear
+            .frame(width: horizontal ? max(1,abs(a.x-b.x)) : 16, height: horizontal ? 16 : max(1,abs(a.y-b.y)))
+            .contentShape(Rectangle())
+            .position(x: (a.x+b.x)/2, y: (a.y+b.y)/2)
+            .accessibilityElement().accessibilityLabel("配線の線分")
+            .accessibilityIdentifier("wire-\(index)-segment-\(segment)")
+            .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                .onChanged { value in
+                    guard tool == .select, let i = wires.firstIndex(where: { $0.id == wire.id }) else { return }
+                    let origin = segmentDragOrigins[wire.id] ?? wires[i].points
+                    segmentDragOrigins[wire.id] = origin
+                    let delta = (horizontal ? value.translation.height : value.translation.width) / canvasScale
+                    wires[i].points = WireRouting.moved(origin, segment: segment, delta: delta, bodies: bodies)
+                    wires[i].manual = true
+                    wires[i].manualPoints = wires[i].points
+                }
+                .onEnded { _ in segmentDragOrigins[wire.id] = nil })
+            .allowsHitTesting(tool == .select)
+    }
+    private func wirePath(_ points: [CGPoint], hops: [WireRouting.Crossing]) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for (index, pair) in WireRouting.segments(points).enumerated() {
+            let (a,b) = pair
+            let direction: CGFloat = b.y > a.y ? 1 : -1
+            let crossings = hops.filter { $0.segment == index && $0.radius > 0 }.sorted { direction * $0.point.y < direction * $1.point.y }
+            for hop in crossings {
+                let p = hop.point, r = hop.radius
+                path.addLine(to: CGPoint(x:p.x,y:p.y-direction*r))
+                path.addArc(center: p, radius: r, startAngle: .degrees(direction > 0 ? -90 : 90), endAngle: .degrees(direction > 0 ? 90 : -90), clockwise: direction < 0)
+            }
+            path.addLine(to:b)
+        }
+        return path
+    }
 }
 
 private struct SymbolCard: View {

@@ -1,0 +1,133 @@
+import Foundation
+import CoreGraphics
+
+
+/// Logical canvas geometry, independent of rendering and viewport transforms.
+enum WireRouting {
+    struct Connection { var start: CGPoint; var end: CGPoint }
+    struct Crossing: Equatable { var point: CGPoint; var segment: Int; var radius: CGFloat }
+    static func segments(_ p: [CGPoint]) -> [(CGPoint, CGPoint)] { Array(zip(p, p.dropFirst())) }
+    static func intersectsInterior(_ a: CGPoint, _ b: CGPoint, _ r: CGRect) -> Bool {
+        if a.y == b.y { return a.y > r.minY && a.y < r.maxY && max(a.x,b.x) > r.minX && min(a.x,b.x) < r.maxX }
+        return a.x > r.minX && a.x < r.maxX && max(a.y,b.y) > r.minY && min(a.y,b.y) < r.maxY
+    }
+    static func overlap(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint, _ d: CGPoint) -> Bool {
+        if a.y == b.y && c.y == d.y && a.y == c.y { return min(max(a.x,b.x),max(c.x,d.x)) > max(min(a.x,b.x),min(c.x,d.x)) }
+        if a.x == b.x && c.x == d.x && a.x == c.x { return min(max(a.y,b.y),max(c.y,d.y)) > max(min(a.y,b.y),min(c.y,d.y)) }
+        return false
+    }
+    static func simplify(_ points: [CGPoint]) -> [CGPoint] {
+        var result: [CGPoint] = []
+        for p in points where result.last != p {
+            while result.count >= 2 {
+                let a = result[result.count-2], b = result[result.count-1]
+                guard (a.x == b.x && b.x == p.x) || (a.y == b.y && b.y == p.y) else { break }
+                result.removeLast()
+            }
+            result.append(p)
+        }
+        return result
+    }
+    static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]]) -> [CGPoint] {
+        func outward(_ p: CGPoint) -> CGFloat { bodies.contains { $0.minX == p.x && $0.midY == p.y } ? -1 : 1 }
+        let start = wire.start, end = wire.end
+        let s = CGPoint(x: start.x + outward(start)*20, y: start.y)
+        let e = CGPoint(x: end.x + outward(end)*20, y: end.y)
+        var xs = [start.x, end.x, s.x, e.x], ys = [start.y,end.y]
+        for r in bodies { xs += [r.minX-20,r.maxX+20]; ys += [r.minY-20,r.maxY+20] }
+        for p in occupied.flatMap({ $0 }) { xs += [p.x-12,p.x+12]; ys += [p.y-12,p.y+12] }
+        xs = Array(Set(xs)).sorted(); ys = Array(Set(ys)).sorted()
+        func clear(_ a: CGPoint, _ b: CGPoint) -> Bool {
+            guard !bodies.contains(where: { intersectsInterior(a,b,$0) }) else { return false }
+            for path in occupied {
+                let shared: [CGPoint] = [start,end].filter { $0 == path.first || $0 == path.last }
+                for (c,d) in segments(path) where overlap(a,b,c,d) {
+                    // Only a horizontal trunk incident to the common pin may be shared.
+                    if !shared.contains(where: { pin in (c == pin || d == pin) && a.y == pin.y && b.y == pin.y }) { return false }
+                }
+            }
+            return true
+        }
+        guard clear(start,s), clear(e,end) else { return [] }
+        let width = xs.count, count = width * ys.count
+        func point(_ i: Int) -> CGPoint { CGPoint(x: xs[i % width], y: ys[i / width]) }
+        let source = ys.firstIndex(of:s.y)! * width + xs.firstIndex(of:s.x)!
+        let target = ys.firstIndex(of:e.y)! * width + xs.firstIndex(of:e.x)!
+        // Queue-based shortest path on the rectilinear visibility grid.
+        var distance = Array(repeating: CGFloat.infinity, count: count)
+        var previous = Array(repeating: -1, count: count)
+        var queued = Array(repeating: false, count: count)
+        var queue = [source], head = 0
+        distance[source] = 0; queued[source] = true
+        while head < queue.count {
+            let i = queue[head]; head += 1; queued[i] = false
+            var neighbors: [Int] = []
+            if i % width > 0 { neighbors.append(i-1) }; if i % width+1 < width { neighbors.append(i+1) }
+            if i >= width { neighbors.append(i-width) }; if i+width < count { neighbors.append(i+width) }
+            for j in neighbors {
+                let a = point(i), b = point(j)
+                guard clear(a,b) else { continue }
+                let cost = distance[i] + abs(a.x-b.x) + abs(a.y-b.y) + 0.01
+                if cost < distance[j] {
+                    distance[j] = cost; previous[j] = i
+                    if !queued[j] { queue.append(j); queued[j] = true }
+                }
+            }
+        }
+        guard distance[target].isFinite else { return [] }
+        var reversed: [CGPoint] = [], cursor = target
+        while cursor != source { reversed.append(point(cursor)); cursor = previous[cursor] }
+        return simplify([start,s] + reversed.reversed() + [end])
+    }
+    static func crossings(_ path: [CGPoint], others: [[CGPoint]]) -> [Crossing] {
+        var result: [Crossing] = []
+        for (i, pair) in segments(path).enumerated() {
+            let (a,b) = pair
+            guard a.x == b.x, a.y != b.y else { continue }
+            for other in others {
+                for (c,d) in segments(other) where c.y == d.y && c.x != d.x {
+                    guard a.x > min(c.x,d.x), a.x < max(c.x,d.x), c.y > min(a.y,b.y), c.y < max(a.y,b.y) else { continue }
+                    let p = CGPoint(x:a.x,y:c.y)
+                    let room = min(abs(p.y-a.y),abs(p.y-b.y))
+                    let crossing = Crossing(point:p,segment:i,radius:room >= 7 ? 7 : 0)
+                    if !result.contains(crossing) { result.append(crossing) }
+                }
+            }
+        }
+        return result
+    }
+    static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect]) -> [CGPoint] {
+        guard segment > 0, segment+1 < path.count-1 else { return path }
+        let horizontal = path[segment].y == path[segment+1].y
+        func candidate(_ amount: CGFloat) -> [CGPoint] {
+            var p = path
+            if horizontal { p[segment].y += amount; p[segment+1].y += amount }
+            else { p[segment].x += amount; p[segment+1].x += amount }
+            return p
+        }
+        func valid(_ p: [CGPoint]) -> Bool { !segments(p).contains { a,b in bodies.contains { intersectsInterior(a,b,$0) } } }
+        // Sweep to the first boundary, so a large gesture cannot tunnel through a body.
+        var accepted: CGFloat = 0
+        let steps = max(1,Int(ceil(abs(delta))))
+        for step in 1...steps {
+            let amount = delta * CGFloat(step)/CGFloat(steps)
+            if !valid(candidate(amount)) {
+                var low = accepted, high = amount
+                for _ in 0..<24 { let mid = (low+high)/2; if valid(candidate(mid)) { low = mid } else { high = mid } }
+                return candidate(low)
+            }
+            accepted = amount
+        }
+        return candidate(accepted)
+    }
+    static func reattach(_ path: [CGPoint], start: CGPoint, end: CGPoint) -> [CGPoint] {
+        guard path.count >= 4 else { return path }
+        var p = path
+        p[0] = start; p[p.count-1] = end
+        // Terminal leads are horizontal. Extending their neighboring vertical
+        // segments preserves every manually chosen line coordinate.
+        p[1].y = start.y
+        p[p.count-2].y = end.y
+        return p
+    }
+}
