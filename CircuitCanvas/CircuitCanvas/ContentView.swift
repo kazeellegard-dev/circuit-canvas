@@ -194,32 +194,32 @@ struct ContentView: View {
 
     private var inspector: some View {
         Form {
-            if let id = selectedSymbol, let index = symbols.firstIndex(where: { $0.id == id }) {
+            if let id = selectedSymbol, let symbol = symbolBinding(for: id) {
                 Section("シンボル") {
-                    Label(symbols[index].title, systemImage: symbols[index].icon)
-                    TextField("名称", text: $symbols[index].title)
-                    LabeledContent("接続", value: isConnected(symbols[index]) ? "接続あり" : "未接続")
+                    Label(symbol.wrappedValue.title, systemImage: symbol.wrappedValue.icon)
+                    TextField("名称", text: symbol.title)
+                    LabeledContent("接続", value: isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                     Button("シンボルを削除", role: .destructive) {
-                        symbols.remove(at: index)
-                        selectedSymbol = nil
+                        removeSymbol(id)
                     }
                 }
-            } else if let id = selectedNote, let index = notes.firstIndex(where: { $0.id == id }) {
+            } else if let id = selectedNote, let note = noteBinding(for: id) {
                 Section("実験メモ") {
-                    Picker("種別", selection: $notes[index].type) { ForEach(NoteType.allCases) { Text($0.rawValue).tag($0) } }
-                    TextField("タイトル", text: $notes[index].title)
-                    TextField("本文", text: $notes[index].body, axis: .vertical)
-                    Toggle("完了", isOn: $notes[index].complete)
+                    Picker("種別", selection: note.type) { ForEach(NoteType.allCases) { Text($0.rawValue).tag($0) } }
+                    TextField("タイトル", text: note.title)
+                    TextField("本文", text: note.body, axis: .vertical)
+                    Toggle("完了", isOn: note.complete)
                     Button("関連付けを開始", systemImage: "arrowshape.turn.up.right") { linkingNote = id }
                     Button("メモを削除", role: .destructive) {
-                        notes.remove(at: index)
-                        selectedNote = nil
+                        removeNote(id)
                     }
                 }
             } else {
                 Section("図面") { LabeledContent("シンボル", value: "\(symbols.count)"); LabeledContent("未完了メモ", value: "\(notes.filter { !$0.complete }.count)") }
                 Section("配線チェック") {
                     LabeledContent("接続済み配線", value: "\(wires.count)")
+                        .accessibilityIdentifier("wire-count")
+                        .accessibilityValue("\(wires.count)")
                     ForEach(symbols) { symbol in Label(isConnected(symbol) ? "\(symbol.title) — 接続あり" : "\(symbol.title) — 未接続", systemImage: isConnected(symbol) ? "checkmark.circle.fill" : "exclamationmark.circle") .foregroundStyle(isConnected(symbol) ? .green : .orange) }
                 }
                 Section("操作") { Text("＋メモを押して任意位置に付箋を置けます。付箋を長押しして「関連付け」を選ぶと、引出し線を追加できます。") }
@@ -228,6 +228,34 @@ struct ContentView: View {
     }
 
     private func setAnchor(_ id: UUID, _ point: CGPoint) { guard let i = notes.firstIndex(where: { $0.id == id }) else { return }; notes[i].anchor = point }
+    private func symbolBinding(for id: UUID) -> Binding<SymbolItem>? {
+        guard let initial = symbols.first(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: { symbols.first(where: { $0.id == id }) ?? initial },
+            set: { updated in guard let index = symbols.firstIndex(where: { $0.id == id }) else { return }; symbols[index] = updated }
+        )
+    }
+    private func noteBinding(for id: UUID) -> Binding<NoteItem>? {
+        guard let initial = notes.first(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: { notes.first(where: { $0.id == id }) ?? initial },
+            set: { updated in guard let index = notes.firstIndex(where: { $0.id == id }) else { return }; notes[index] = updated }
+        )
+    }
+    private func removeSymbol(_ id: UUID) {
+        guard let symbol = symbols.first(where: { $0.id == id }) else { return }
+        let symbolPins = pins(for: symbol)
+        wires.removeAll { wire in
+            symbolPins.contains { pin in wire.start.distance(to: pin) < 1 || wire.end.distance(to: pin) < 1 }
+        }
+        selectedSymbol = nil
+        symbols.removeAll { $0.id == id }
+    }
+    private func removeNote(_ id: UUID) {
+        selectedNote = nil
+        linkingNote = nil
+        notes.removeAll { $0.id == id }
+    }
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
             .onChanged { value in
@@ -288,7 +316,7 @@ private struct SymbolCard: View {
     let symbol: SymbolItem
     let isConnected: Bool
     let selected: Bool
-    var body: some View { VStack(spacing: 6) { Image(systemName: symbol.icon).foregroundStyle(.secondary); Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1) }.frame(width: 150, height: 64).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2)).overlay { HStack { Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10); Spacer(); Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10) } }.accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")") }
+    var body: some View { VStack(spacing: 6) { Image(systemName: symbol.icon).foregroundStyle(.secondary); Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1) }.frame(width: 150, height: 64).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2)).overlay { HStack { Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10); Spacer(); Circle().stroke(isConnected ? .green : .orange, lineWidth: 2).frame(width: 10, height: 10) } }.accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")").accessibilityIdentifier("symbol-\(symbol.title)") }
 }
 
 private struct NoteCard: View {
