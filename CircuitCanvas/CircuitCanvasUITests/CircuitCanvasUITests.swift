@@ -74,7 +74,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
         app.buttons["配線"].tap()
         app.buttons["symbol-Temperature-pin-1"].tap()
-        app.buttons["symbol-CAN-pin-1"].tap()
+        app.buttons["symbol-CAN-pin-0"].tap()
         app.buttons["確認"].tap()
 
         let wireCount = app.descendants(matching: .any).matching(identifier: "wire-count").firstMatch
