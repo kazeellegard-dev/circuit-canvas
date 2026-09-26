@@ -102,6 +102,14 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         default: point
         }
     }
+    /// Where a wire end goes when a symbol's pins move from `old` to `new`: the pin it sat on
+    /// (matched once, against the *old* positions), or nil if it was not on any of them.
+    /// Matching once matters: a new position may coincide with another old pin
+    /// (e.g. a connector moved by exactly one pin pitch).
+    static func remapped(_ point: CGPoint, from old: [CGPoint], to new: [CGPoint]) -> CGPoint? {
+        guard let index = old.firstIndex(where: { hypot($0.x-point.x,$0.y-point.y) < 1 }) else { return nil }
+        return new[index]
+    }
     func pins(at position: CGPoint, rotation: Int? = nil) -> [CGPoint] {
         let angle = isBlock ? 0 : (rotation ?? defaultRotation)
         return pinSpecs.map { spec in

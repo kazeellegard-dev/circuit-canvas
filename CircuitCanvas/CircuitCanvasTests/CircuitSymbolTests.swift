@@ -187,4 +187,21 @@ struct CircuitSymbolTests {
             #expect((plateXs.max() ?? 0) - (plateXs.min() ?? 0) <= 16)
         }
     }
+
+    /// Regression (Codex review): a wire end used to be re-matched against the remaining old pins after
+    /// it had been moved, so moving a connector by one pin pitch sent P1's wire on to P4.
+    @Test func wireEndsFollowTheirOwnPinWhenNewPinsCoincideWithOldOnes() {
+        let connector = SymbolKind.connector
+        let old = connector.pins(at:CGPoint(x:300,y:200))
+        let moved = connector.pins(at:CGPoint(x:300,y:230))            // exactly one pitch down
+        for index in old.indices {
+            #expect(SymbolKind.remapped(old[index],from:old,to:moved) == moved[index], "P\(index+1)")
+        }
+        // Two-terminal symbol shifted by its own pin distance: pin 0 lands on the old pin 1.
+        let resistor = SymbolKind.resistor
+        let before = resistor.pins(at:CGPoint(x:300,y:200)), after = resistor.pins(at:CGPoint(x:360,y:200))
+        #expect(SymbolKind.remapped(before[0],from:before,to:after) == after[0])
+        #expect(SymbolKind.remapped(before[1],from:before,to:after) == after[1])
+        #expect(SymbolKind.remapped(CGPoint(x:1,y:1),from:before,to:after) == nil)
+    }
 }

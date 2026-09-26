@@ -366,12 +366,10 @@ struct ContentView: View {
         symbols[i].rotation = (symbols[i].rotation + 90) % 360
         let new = pins(for:symbols[i])
         for j in wires.indices {
-            for k in old.indices {
-                if wires[j].start == old[k] { wires[j].start = new[k]; wires[j].manual = false }
-                if wires[j].end == old[k] { wires[j].end = new[k]; wires[j].manual = false }
-            }
+            if let point = SymbolKind.remapped(wires[j].start, from: old, to: new) { wires[j].start = point; wires[j].manual = false }
+            if let point = SymbolKind.remapped(wires[j].end, from: old, to: new) { wires[j].end = point; wires[j].manual = false }
         }
-        if let pin = pendingWireStart, let k = old.firstIndex(of:pin) { pendingWireStart = new[k] }
+        if let pin = pendingWireStart, let point = SymbolKind.remapped(pin, from: old, to: new) { pendingWireStart = point }
         reroute()
     }
     private func removeSymbol(_ id: UUID) {
@@ -438,10 +436,8 @@ struct ContentView: View {
         symbols[index].position = newPosition
         let newPins = pins(for: symbols[index])
         for wireIndex in wires.indices {
-            for pinIndex in oldPins.indices {
-                if wires[wireIndex].start.distance(to: oldPins[pinIndex]) < 1 { wires[wireIndex].start = newPins[pinIndex] }
-                if wires[wireIndex].end.distance(to: oldPins[pinIndex]) < 1 { wires[wireIndex].end = newPins[pinIndex] }
-            }
+            if let point = SymbolKind.remapped(wires[wireIndex].start, from: oldPins, to: newPins) { wires[wireIndex].start = point }
+            if let point = SymbolKind.remapped(wires[wireIndex].end, from: oldPins, to: newPins) { wires[wireIndex].end = point }
         }
         _ = oldPosition
         reroute()

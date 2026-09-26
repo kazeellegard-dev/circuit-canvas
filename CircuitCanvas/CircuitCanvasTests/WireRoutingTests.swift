@@ -156,30 +156,39 @@ struct WireRoutingTests {
         #expect(WireRouting.crossings(vertical,others:[[p(0,3),p(100,3)]]).first?.radius == 0)
         #expect(WireRouting.crossings([p(150,0),p(150,100)],others:[horizontal]).isEmpty)
     }
+    /// Two-, three- and four-terminal symbols at every rotation: routes stay orthogonal, avoid every
+    /// body, leave each pin outward by at least the compact lead, and wires from one pin share a trunk.
     @Test func rotatedPinsRouteOutwardAvoidBodiesAndShareOnlyTerminalTrunks() {
-        for rotation in [0,90,180,270] {
-            let centers = [p(200,200),p(500,400),p(600,100)]
-            let obstacles = centers.map { SymbolKind.resistor.body(at:$0,rotation:rotation) }
-            let pins = centers.map { SymbolKind.resistor.pins(at:$0,rotation:rotation) }
-            var paths: [[CGPoint]] = []
-            for target in [1,2] {
+        for kind in [SymbolKind.resistor,.npn,.opAmp,.relay,.connector] {
+            for rotation in [0,90,180,270] {
+                let centers = [p(200,200),p(500,400),p(600,100)]
+                let obstacles = centers.map { kind.body(at:$0,rotation:rotation) }
+                let pins = centers.map { kind.pins(at:$0,rotation:rotation) }
                 let margins = [CGFloat?](repeating:WireRouting.symbolLead,count:obstacles.count)
-                let path = WireRouting.route(.init(start:pins[0][0],end:pins[target][1],
-                                                   startDirection:SymbolKind.resistor.direction(for:0,rotation:rotation),
-                                                   endDirection:SymbolKind.resistor.direction(for:1,rotation:rotation)),
-                                             bodies:obstacles,occupied:paths,margins:margins)
-                #expect(path.count >= 4)
-                guard path.count >= 4 else { continue }
-                for (a,b) in WireRouting.segments(path) {
-                    #expect(a.x == b.x || a.y == b.y)
-                    #expect(!obstacles.contains { WireRouting.intersectsInterior(a,b,$0) })
+                let last = kind.pinCount - 1
+                var paths: [[CGPoint]] = []
+                for target in [1,2] {
+                    let connection = WireRouting.Connection(
+                        start:pins[0][0],end:pins[target][last],
+                        startDirection:kind.direction(for:0,rotation:rotation),
+                        endDirection:kind.direction(for:last,rotation:rotation))
+                    let path = WireRouting.route(connection,bodies:obstacles,occupied:paths,margins:margins)
+                    #expect(path.count >= 3, "\(kind) at \(rotation)")
+                    guard path.count >= 3 else { continue }
+                    #expect(path.first == connection.start && path.last == connection.end)
+                    for (a,b) in WireRouting.segments(path) {
+                        #expect(a.x == b.x || a.y == b.y)
+                        #expect(!obstacles.contains { WireRouting.intersectsInterior(a,b,$0) }, "\(kind) at \(rotation)")
+                    }
+                    for (pin,next,direction) in [(path[0],path[1],connection.startDirection!),(path.last!,path[path.count-2],connection.endDirection!)] {
+                        let along = (next.x-pin.x)*direction.vector.x + (next.y-pin.y)*direction.vector.y
+                        #expect(along >= WireRouting.symbolLead - 0.001, "\(kind) at \(rotation)")
+                        #expect((next.x-pin.x)*direction.vector.y == 0 && (next.y-pin.y)*direction.vector.x == 0)
+                    }
+                    paths.append(path)
                 }
-                for (pin,next,center) in [(path[0],path[1],centers[0]),(path.last!,path[path.count-2],centers[target])] {
-                    #expect((next.x-pin.x)*(pin.x-center.x)+(next.y-pin.y)*(pin.y-center.y) >= WireRouting.symbolLead*30)
-                }
-                paths.append(path)
+                #expect(!WireRouting.junctions(paths).isEmpty, "\(kind) at \(rotation)")
             }
-            #expect(!WireRouting.junctions(paths).isEmpty)
         }
     }
 
@@ -211,5 +220,17 @@ struct WireRoutingTests {
             for (a,b) in WireRouting.segments(path) { #expect(a.x == b.x || a.y == b.y) }
             occupied.append(path)
         }
+    }
+
+    /// The last resort. The start pin's lead ends inside another body for every lead length, so no
+    /// planned route exists; the wire must still be drawn, as the plain orthogonal path with 8pt stubs.
+    /// (That path crosses the blocking body, which no planned route ever does - so equality proves the fallback ran.)
+    @Test func wireIsStillDrawnWhenNoPlannedRouteExists() {
+        let blocker = CGRect(x:5,y:-50,width:95,height:100)     // the start lead (8...15pt) lands inside it
+        let start = p(0,0), end = p(200,100)
+        let path = WireRouting.route(.init(start:start,end:end,startDirection:.right,endDirection:.left),
+                                     bodies:[blocker],occupied:[],margins:[WireRouting.symbolLead])
+        #expect(path == [p(0,0),p(192,0),p(192,100),p(200,100)])
+        #expect(WireRouting.segments(path).contains { WireRouting.intersectsInterior($0,$1,blocker) })
     }
 }

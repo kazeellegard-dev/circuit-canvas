@@ -685,6 +685,92 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(element(app,"wire-count").value as? String,"3")
     }
 
+    /// Multi-terminal wiring in one launch (Codex review): a 4-pin connector wired to a 3-pin transistor.
+    /// Covers adjacent 30pt pins, self-connection rejection for any pin pair, separate wires from every
+    /// pin, all ends following through a full turn of rotation, orthogonal routes clear of both bodies,
+    /// and a one-pitch drag (30pt) that must not send a wire to another pin.
+    @MainActor
+    func testMultiTerminalWiringAdjacentPinsRotationAndMove() {
+        let app = XCUIApplication(); app.launch()
+        let connector = CGPoint(x:200,y:700), transistor = CGPoint(x:520,y:700)
+        place(app,category:"リレー・コネクタ",name:"コネクタ",x:connector.x,y:connector.y)
+        place(app,category:"半導体",name:"NPNトランジスタ",x:transistor.x,y:transistor.y)
+        func pin(_ name: String, _ index: Int) -> XCUIElement { app.buttons["symbol-\(name)-pin-\(index)"] }
+
+        // Adjacent pins 30pt apart: only the tapped one is selected; any other pin of the same symbol is rejected.
+        app.buttons["配線"].tap()
+        pin("コネクタ",1).tap()
+        XCTAssertTrue(pin("コネクタ",1).isSelected)
+        XCTAssertFalse(pin("コネクタ",0).isSelected || pin("コネクタ",2).isSelected || pin("コネクタ",3).isSelected)
+        for other in [0,2,3] {
+            pin("コネクタ",other).tap()
+            XCTAssertTrue(pin("コネクタ",1).isSelected, "start must stay selected after P\(other+1)")
+            XCTAssertFalse(pin("コネクタ",other).isSelected)
+            XCTAssertFalse(element(app,"wire-3").exists)
+        }
+        // A separate wire from each of P1...P3 to the transistor's B, C, E.
+        for index in 0..<3 {
+            app.buttons["配線"].tap()
+            pin("コネクタ",index).tap()
+            pin("NPNトランジスタ",index).tap()
+            XCTAssertTrue(element(app,"wire-\(3+index)").waitForExistence(timeout:2), "wire \(index)")
+        }
+        XCTAssertFalse(element(app,"wire-6").exists)
+
+        func rotate(_ point: (Double,Double), _ rotation: Int) -> (Double,Double) {
+            switch rotation { case 90: (-point.1,point.0); case 180: (-point.0,-point.1); case 270: (point.1,-point.0); default: point }
+        }
+        let offsets: [(Double,Double)] = [(-30,-45),(-30,-15),(-30,15),(-30,45)]
+        func assertConnectorState(_ rotation: Int, center: CGPoint, _ label: String) {
+            XCTAssertEqual(element(app,"symbol-コネクタ-rotation").value as? String,"\(rotation)",label)
+            for (index,offset) in offsets.enumerated() {
+                let turned = rotate(offset,rotation)
+                XCTAssertEqual(coordinates(pin("コネクタ",index)),[Double(center.x)+turned.0,Double(center.y)+turned.1],"\(label) P\(index+1)")
+            }
+            let frame = rotation % 180 == 0 ? CGSize(width:60,height:120) : CGSize(width:120,height:60)
+            let bodies = [CGRect(x:center.x-frame.width/2,y:center.y-frame.height/2,width:frame.width,height:frame.height),
+                          CGRect(x:transistor.x-30,y:transistor.y-30,width:60,height:60)]
+            for index in 0..<3 {
+                // Each wire still joins its own two pins, orthogonally, outside both bodies.
+                XCTAssertEqual(coordinates(element(app,"wire-\(3+index)")),
+                               coordinates(pin("コネクタ",index)) + coordinates(pin("NPNトランジスタ",index)),"\(label) wire \(index)")
+                let points = routePoints(app,3+index)
+                XCTAssertGreaterThanOrEqual(points.count,2,"\(label) wire \(index)")
+                for (a,b) in zip(points,points.dropFirst()) {
+                    XCTAssertTrue(a.x == b.x || a.y == b.y)
+                    for body in bodies {
+                        let inside = a.y == b.y
+                            ? a.y > body.minY && a.y < body.maxY && max(a.x,b.x) > body.minX && min(a.x,b.x) < body.maxX
+                            : a.x > body.minX && a.x < body.maxX && max(a.y,b.y) > body.minY && min(a.y,b.y) < body.maxY
+                        XCTAssertFalse(inside,"\(label) wire \(index) crosses \(body)")
+                    }
+                }
+            }
+        }
+        assertConnectorState(0,center:connector,"initial")
+
+        // A full turn: every end follows its pin.
+        element(app,"symbol-コネクタ").tap()
+        for rotation in [90,180,270,0] {
+            app.buttons["symbol-コネクタ-rotate"].tap()
+            assertConnectorState(rotation,center:connector,"rotation \(rotation)")
+        }
+
+        // Drag by about one pin pitch: P1's wire must stay on P1, not slide on to P2...P4.
+        let symbol = element(app,"symbol-コネクタ").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        let before = (0..<4).map { coordinates(pin("コネクタ",$0)) }
+        symbol.press(forDuration:0.2,thenDragTo:symbol.withOffset(CGVector(dx:0,dy:30)))
+        let after = (0..<4).map { coordinates(pin("コネクタ",$0)) }
+        let shift = after[0][1]-before[0][1]
+        XCTAssertGreaterThan(shift,20)
+        for index in 0..<4 {
+            XCTAssertEqual(after[index],[before[index][0],before[index][1]+shift],"P\(index+1) moved with the symbol")
+        }
+        for index in 0..<3 {
+            XCTAssertEqual(coordinates(element(app,"wire-\(3+index)")),after[index] + coordinates(pin("NPNトランジスタ",index)),"wire \(index) after drag")
+        }
+    }
+
     @MainActor
     func testVerticalPowerSegmentDragBranchAndRotation() {
         let app = XCUIApplication(); app.launch()
