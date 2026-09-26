@@ -275,8 +275,8 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertRoutesClear(_ app: XCUIApplication, count: Int) {
-        let bodies = ["24 V → 5 V","Main MCU","CAN","Temperature"].map { name -> CGRect in
+    private func assertRoutesClear(_ app: XCUIApplication, count: Int, extraSymbols: [String] = []) {
+        let bodies = (["24 V → 5 V","Main MCU","CAN","Temperature"] + extraSymbols).map { name -> CGRect in
             let xy = coordinates(app.buttons["symbol-\(name)-pin-0"])
             return CGRect(x:xy[0],y:xy[1]-32,width:150,height:64)
         }
@@ -589,6 +589,83 @@ final class CircuitCanvasUITests: XCTestCase {
         },symbols)
         XCTAssertEqual(coordinates(element(app,"wire-2")),[195,390,295,250])
         assertWireCount(app,"3")
+    }
+
+    @MainActor
+    private func place(_ app: XCUIApplication, category: String, name: String, x: CGFloat, y: CGFloat) {
+        app.buttons["library-category-\(category)"].tap()
+        let item = app.buttons["library-\(name)"]
+        if !item.isHittable { item.swipeLeft() }
+        item.tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero)
+            .withOffset(CGVector(dx:x,dy:y)).tap()
+        XCTAssertTrue(element(app,"symbol-\(name)").exists)
+    }
+
+    @MainActor
+    func testCircuitCataloguePlacementKindsAndTerminals() {
+        let groups: [(String,[String])] = [
+            ("電源",["直流電源","電池","交流電源","VCC","GND"]),
+            ("受動部品",["抵抗","可変抵抗","コンデンサ","電解コンデンサ","コイル"]),
+            ("半導体",["ダイオード","LED","ツェナーダイオード","フォトダイオード"]),
+            ("スイッチ・保護",["スイッチ","押しボタン","ヒューズ"]),
+            ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"]),
+            ("ブロック",["DC/DC","MCU","CAN","センサー","汎用ブロック"])
+        ]
+        for (category,names) in groups {
+            for name in names {
+                let app = XCUIApplication(); app.launch()
+                place(app,category:category,name:name,x:380,y:530)
+                // CAN also exists in the initial diagram; select the newly placed instance.
+                let symbols = app.descendants(matching:.any).matching(identifier:"symbol-\(name)")
+                XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"))
+                XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains(category == "ブロック" ? "style=block" : "style=circuit"))
+                XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].firstMatch.exists)
+                XCTAssertEqual(app.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name != "GND" && name != "VCC")
+                app.terminate()
+            }
+        }
+    }
+
+    @MainActor
+    func testCircuitWiringSelfRejectionMovementAndGroundDeletion() {
+        let app = XCUIApplication(); app.launch()
+        for name in ["24 V → 5 V","Main MCU","CAN","Temperature"] {
+            XCTAssertTrue((element(app,"symbol-\(name)").value as? String ?? "").contains("style=block"))
+        }
+        place(app,category:"受動部品",name:"抵抗",x:160,y:530)
+        place(app,category:"半導体",name:"LED",x:440,y:620)
+        place(app,category:"電源",name:"GND",x:690,y:530)
+        XCTAssertTrue(element(app,"symbol-GND").label.contains("未接続"))
+        for name in ["抵抗","GND"] {
+            app.buttons["配線"].tap()
+            app.buttons["symbol-\(name)-pin-0"].tap()
+            app.buttons["symbol-\(name)-pin-\(name == "GND" ? 0 : 1)"].tap()
+            XCTAssertFalse(element(app,"wire-3").exists)
+            XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].isSelected)
+        }
+        func connect(_ a: String, _ b: String) {
+            app.buttons["配線"].tap(); app.buttons[a].tap(); app.buttons[b].tap()
+        }
+        connect("symbol-抵抗-pin-1","symbol-LED-pin-0")
+        XCTAssertEqual(coordinates(element(app,"wire-3")),coordinates(app.buttons["symbol-抵抗-pin-1"]) + coordinates(app.buttons["symbol-LED-pin-0"]))
+        let source = element(app,"symbol-抵抗").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:30,dy:-30)))
+        XCTAssertEqual(coordinates(element(app,"wire-3")),coordinates(app.buttons["symbol-抵抗-pin-1"]) + coordinates(app.buttons["symbol-LED-pin-0"]))
+        assertRoutesClear(app,count:4,extraSymbols:["抵抗","LED","GND"])
+        connect("symbol-抵抗-pin-1","symbol-GND-pin-0")
+        connect("symbol-LED-pin-1","symbol-GND-pin-0")
+        XCTAssertTrue(element(app,"symbol-GND").label.contains("接続あり"))
+        XCTAssertFalse((element(app,"canvas-junctions").value as? String ?? "").isEmpty)
+        element(app,"symbol-GND").tap(); app.buttons["確認"].tap()
+        XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり", app.debugDescription)
+        let field = app.textFields["名称"]
+        field.tap()
+        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:3) + "接地")
+        XCTAssertTrue(element(app,"symbol-接地").exists)
+        app.buttons["シンボルを削除"].tap()
+        XCTAssertFalse(element(app,"symbol-接地").exists)
+        XCTAssertEqual(element(app,"wire-count").value as? String,"4")
     }
 
     @MainActor

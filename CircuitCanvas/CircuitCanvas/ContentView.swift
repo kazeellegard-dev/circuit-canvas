@@ -9,14 +9,15 @@ import SwiftUI
 
 private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
-private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var icon: String; var position: CGPoint }
+private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var icon: String { kind.icon } }
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint? }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var tool: Tool = .select
-    @State private var selectedLibrary = "汎用ブロック"
+    @State private var selectedLibrary: SymbolKind = .block
+    @State private var selectedCategory: SymbolCategory = .block
     @State private var selectedSymbol: UUID?
     @State private var selectedNote: UUID?
     @State private var linkingNote: UUID?
@@ -37,10 +38,10 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showInspector = false
     @State private var symbols: [SymbolItem] = [
-        .init(title: "24 V → 5 V", icon: "bolt.fill", position: .init(x: 120, y: 160)),
-        .init(title: "Main MCU", icon: "cpu", position: .init(x: 370, y: 250)),
-        .init(title: "CAN", icon: "arrow.left.and.right", position: .init(x: 620, y: 250)),
-        .init(title: "Temperature", icon: "sensor.tag.radiowaves.forward", position: .init(x: 120, y: 390))
+        .init(title: "24 V → 5 V", kind: .converter, position: .init(x: 120, y: 160)),
+        .init(title: "Main MCU", kind: .mcu, position: .init(x: 370, y: 250)),
+        .init(title: "CAN", kind: .can, position: .init(x: 620, y: 250)),
+        .init(title: "Temperature", kind: .sensor, position: .init(x: 120, y: 390))
     ]
     @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
     @State private var wires: [WireItem] = [
@@ -49,7 +50,6 @@ struct ContentView: View {
         .init(start: .init(x: 195, y: 390), end: .init(x: 295, y: 250))
     ]
 
-    private let library = ["DC/DC", "MCU", "CAN", "抵抗", "GND", "センサー", "汎用ブロック"]
     private var compact: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
@@ -58,7 +58,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     editor
                     Divider()
-                    libraryView.frame(height: 104)
+                    libraryView.frame(height: 132)
                 }
             }
             .navigationTitle("Circuit Canvas")
@@ -78,26 +78,42 @@ struct ContentView: View {
     }
 
     private var libraryView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(library, id: \.self) { name in
-                    Button { selectedLibrary = name; tool = .symbol } label: {
-                        VStack(spacing: 5) {
-                            Image(systemName: icon(for: name)).font(.title3).frame(height: 26)
-                            Text(name).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
-                        }
-                        .frame(width: 62, height: 72)
-                        .foregroundStyle(selectedLibrary == name ? Color.accentColor : Color.primary)
-                        .background(selectedLibrary == name ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(SymbolCategory.allCases) { category in
+                        Button(category.rawValue) { selectedCategory = category }
+                            .font(.caption)
+                            .padding(8)
+                            .background(selectedCategory == category ? Color.accentColor.opacity(0.15) : .clear, in: Capsule())
+                            .accessibilityIdentifier("library-category-\(category.rawValue)")
+                            .accessibilityAddTraits(selectedCategory == category ? .isSelected : [])
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(name)を配置")
-                }
+                }.padding(.horizontal, 12)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-        .background(.bar)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(SymbolKind.allCases.filter { $0.category == selectedCategory }) { kind in
+                        Button { selectedLibrary = kind; tool = .symbol } label: {
+                            VStack(spacing: 5) {
+                                if kind.isBlock {
+                                    Image(systemName: kind.icon).font(.title3).frame(height: 32)
+                                } else {
+                                    CircuitSymbolShape(kind: kind).stroke(lineWidth: 1.5).frame(width: 75, height: 32)
+                                }
+                                Text(kind.rawValue).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
+                            }
+                            .frame(width: 92, height: 72)
+                            .foregroundStyle(selectedLibrary == kind ? Color.accentColor : Color.primary)
+                            .background(selectedLibrary == kind ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(kind.rawValue)を配置")
+                        .accessibilityIdentifier("library-\(kind.rawValue)")
+                    }
+                }.padding(.horizontal, 12).padding(.vertical, 8)
+            }.id(selectedCategory)
+        }.background(.bar)
     }
 
     private var editor: some View {
@@ -122,7 +138,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
                     else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
-                    else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary)を配置") }
+                    else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary.rawValue)を配置") }
                     else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
                 }.padding(16).allowsHitTesting(false)
             }
@@ -242,7 +258,7 @@ struct ContentView: View {
                     selectWirePin(pin)
                 }
                 else if tool == .note { notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
-                else if tool == .symbol { symbols.append(.init(title: selectedLibrary, icon: icon(for: selectedLibrary), position: point)); tool = .select; reroute() }
+                else if tool == .symbol { symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
                 else { selectedNote = nil; selectedSymbol = nil }
             }
     }
@@ -251,9 +267,11 @@ struct ContentView: View {
         Form {
             if let id = selectedSymbol, let symbol = symbolBinding(for: id) {
                 Section("シンボル") {
-                    Label(symbol.wrappedValue.title, systemImage: symbol.wrappedValue.icon)
+                    Text(symbol.wrappedValue.title)
                     TextField("名称", text: symbol.title)
                     LabeledContent("接続", value: isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
+                        .accessibilityIdentifier("symbol-connection-status")
+                        .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                     Button("シンボルを削除", role: .destructive) {
                         removeSymbol(id)
                     }
@@ -397,10 +415,10 @@ struct ContentView: View {
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
-    private func pins(for symbol: SymbolItem) -> [CGPoint] { [.init(x: symbol.position.x - 75, y: symbol.position.y), .init(x: symbol.position.x + 75, y: symbol.position.y)] }
+    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
     private func isConnected(_ symbol: SymbolItem) -> Bool { pins(for: symbol).contains { pin in wires.contains { $0.start.distance(to: pin) < 1 || $0.end.distance(to: pin) < 1 } } }
-    private func icon(for name: String) -> String { ["DC/DC": "bolt.fill", "MCU": "cpu", "CAN": "arrow.left.and.right", "抵抗": "minus", "GND": "arrow.down.to.line", "センサー": "sensor.tag.radiowaves.forward", "汎用ブロック": "square.dashed"][name] ?? "square.dashed" }
+
     private func hint(_ icon: String, _ text: String) -> some View {
         Label(text, systemImage: icon).font(.footnote.weight(.medium)).padding(10)
             .background(.thinMaterial, in: Capsule()).accessibilityIdentifier("operation-hint")
@@ -489,22 +507,43 @@ private struct SymbolCard: View {
     let selectPin: (Int) -> Void
     var body: some View {
         ZStack {
-            VStack(spacing: 6) {
-                Image(systemName: symbol.icon).foregroundStyle(.secondary)
-                Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1)
+            Group {
+                if symbol.kind.isBlock {
+                    VStack(spacing: 6) {
+                        Image(systemName: symbol.icon).foregroundStyle(.secondary)
+                        Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                    }
+                } else {
+                    ZStack(alignment: .bottom) {
+                        CircuitSymbolShape(kind: symbol.kind).stroke(.primary, lineWidth: 2)
+                        Text(symbol.title).font(.system(size: 10)).lineLimit(1)
+                            .padding(.horizontal, 8)
+                    }.frame(width: 150, height: 64)
+                }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(symbol.title) シンボル、\(isConnected ? "接続あり" : "未接続")")
             .accessibilityIdentifier("symbol-\(symbol.title)")
+            .accessibilityValue("kind=\(symbol.kind.rawValue), style=\(symbol.kind.isBlock ? "block" : "circuit")")
 
-            // Keep the visible pin centers at the same ±75pt used by pins(for:).
             pin(0).offset(x: -75)
-            pin(1).offset(x: 75)
+            if symbol.kind.pinCount == 2 { pin(1).offset(x: 75) }
         }
         .frame(width: 150, height: 64)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .primary, lineWidth: selected ? 3 : 2))
+        .background {
+            if symbol.kind.isBlock { RoundedRectangle(cornerRadius: 8).fill(.background) }
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            if symbol.kind.isBlock || selected {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(selected ? Color.accentColor.opacity(symbol.kind.isBlock ? 1 : 0.5) : .primary,
+                            lineWidth: symbol.kind.isBlock ? (selected ? 3 : 2) : 1)
+                    .allowsHitTesting(false)
+            }
+        }
     }
+
     private func pin(_ index: Int) -> some View {
         Button { selectPin(index) } label: {
             Circle()
