@@ -51,38 +51,6 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingSymbolRemovesAttachedWires() throws {
-        let app = XCUIApplication()
-        app.launch()
-
-        let temperature = app.descendants(matching: .any).matching(identifier: "symbol-Temperature").firstMatch
-        XCTAssertTrue(temperature.waitForExistence(timeout: 3))
-        temperature.tap()
-        app.buttons["確認"].tap()
-        app.buttons["シンボルを削除"].tap()
-
-        XCTAssertFalse(temperature.waitForExistence(timeout: 1))
-        let wireCount = app.descendants(matching: .any).matching(identifier: "wire-count").firstMatch
-        XCTAssertTrue(wireCount.waitForExistence(timeout: 2))
-        XCTAssertEqual(wireCount.value as? String, "2")
-    }
-
-    @MainActor
-    func testWireToolConnectsTwoSymbolPins() throws {
-        let app = XCUIApplication()
-        app.launch()
-
-        app.buttons["配線"].tap()
-        app.buttons["symbol-Temperature-pin-1"].tap()
-        app.buttons["symbol-CAN-pin-0"].tap()
-        app.buttons["確認"].tap()
-
-        let wireCount = app.descendants(matching: .any).matching(identifier: "wire-count").firstMatch
-        XCTAssertTrue(wireCount.waitForExistence(timeout: 2))
-        XCTAssertEqual(wireCount.value as? String, "4")
-    }
-
-    @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
@@ -105,63 +73,57 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
-    func testDuplicateWireIsRejectedInBothDirections() {
-        // Relaunch per direction so each attempt is checked independently.
+    func testWireToolConnectsPinsAndRejectsDuplicatesBothWays() {
+        let app = XCUIApplication(); app.launch()
+        connectTemperatureToCAN(app)
+        XCTAssertFalse(element(app, "wire-4").exists)
+        let pins = ["symbol-Temperature-pin-1", "symbol-CAN-pin-0"]
         for reversed in [false, true] {
-            let app = XCUIApplication()
-            app.launch()
-            connectTemperatureToCAN(app)
             app.buttons["配線"].tap()
-            let pins = ["symbol-Temperature-pin-1", "symbol-CAN-pin-0"]
             app.buttons[pins[reversed ? 1 : 0]].tap()
             app.buttons[pins[reversed ? 0 : 1]].tap()
-            assertWireCount(app, "4")
-            app.terminate()
+            XCTAssertFalse(element(app, "wire-4").exists, "duplicate accepted (reversed: \(reversed))")
         }
-    }
-
-    @MainActor
-    func testPressingWireToolAgainClearsStartPin() {
-        let app = XCUIApplication()
-        app.launch()
-        let oldStart = app.buttons["symbol-Temperature-pin-1"]
-        let newStart = app.buttons["symbol-CAN-pin-1"]
-        app.buttons["配線"].tap()
-        oldStart.tap()
-        XCTAssertTrue(oldStart.isSelected)
-        XCTAssertTrue(app.staticTexts["終点のピンをタップ（直交で自動配線）"].exists)
-        app.buttons["配線"].tap()
-        XCTAssertFalse(oldStart.isSelected)
-        XCTAssertTrue(app.staticTexts["始点のピンをタップ"].exists)
-        newStart.tap()
-        XCTAssertTrue(newStart.isSelected)
-        XCTAssertFalse(element(app, "wire-3").exists)
-        app.buttons["symbol-Temperature-pin-0"].tap()
-        XCTAssertEqual(coordinates(element(app, "wire-3")), [695, 250, 45, 390])
         assertWireCount(app, "4")
     }
 
     @MainActor
-    func testResetStartPinCanBeReusedAsEndWithMatchingWireCoordinates() {
-        let app = XCUIApplication()
-        app.launch()
-        let oldStart = app.buttons["symbol-Temperature-pin-1"]
-        let newStart = app.buttons["symbol-CAN-pin-1"]
+    func testStartPinSelectionResetsAndIsReusedWithoutStrayWires() {
+        let app = XCUIApplication(); app.launch()
+        let temperatureRight = app.buttons["symbol-Temperature-pin-1"]
+        let temperatureLeft = app.buttons["symbol-Temperature-pin-0"]
+        let canRight = app.buttons["symbol-CAN-pin-1"]
+        let endHint = app.staticTexts["終点のピンをタップ（直交で自動配線）"]
+        // The opposite pin of the same symbol is ignored: the start stays selected, no wire.
         app.buttons["配線"].tap()
-        oldStart.tap()
-        app.buttons["配線"].tap()
-        newStart.tap()
-        XCTAssertTrue(newStart.isSelected)
-        XCTAssertFalse(oldStart.isSelected)
+        temperatureRight.tap(); temperatureLeft.tap()
+        XCTAssertTrue(temperatureRight.isSelected)
         XCTAssertFalse(element(app, "wire-3").exists)
-        oldStart.tap()
-
-        let wire = element(app, "wire-3")
+        XCTAssertTrue(endHint.exists)
+        // Pressing the wire tool again clears the start pin; a new start can be chosen.
+        app.buttons["配線"].tap()
+        XCTAssertFalse(temperatureRight.isSelected)
+        XCTAssertTrue(app.staticTexts["始点のピンをタップ"].exists)
+        canRight.tap()
+        XCTAssertTrue(canRight.isSelected)
+        XCTAssertFalse(element(app, "wire-3").exists)
+        temperatureLeft.tap()
+        XCTAssertEqual(coordinates(element(app, "wire-3")), [695, 250, 45, 390])
+        // A start pin that was reset can be reused as the end pin, with matching coordinates.
+        app.buttons["配線"].tap()
+        temperatureRight.tap()
+        app.buttons["配線"].tap()
+        canRight.tap()
+        XCTAssertTrue(canRight.isSelected)
+        XCTAssertFalse(temperatureRight.isSelected)
+        XCTAssertFalse(element(app, "wire-4").exists)
+        temperatureRight.tap()
+        let wire = element(app, "wire-4")
         XCTAssertTrue(wire.waitForExistence(timeout: 2))
         // Compare numeric coordinates: accessibility may include trailing zeros.
         XCTAssertEqual(coordinates(wire), [695, 250, 195, 390])
-        XCTAssertEqual(coordinates(wire), coordinates(newStart) + coordinates(oldStart))
-        assertWireCount(app, "4")
+        XCTAssertEqual(coordinates(wire), coordinates(canRight) + coordinates(temperatureRight))
+        assertWireCount(app, "5")
     }
 
     @MainActor
@@ -170,7 +132,7 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
-    func testVisiblePinCentersMatchWireEndpointOffsets() {
+    func testPinCentersMatchAndWireEndpointsFollowBothDraggedSymbols() {
         let app = XCUIApplication()
         app.launch()
         connectTemperatureToCAN(app)
@@ -184,13 +146,6 @@ final class CircuitCanvasUITests: XCTestCase {
             XCTAssertEqual(left.midY, right.midY, accuracy: 1)
         }
         XCTAssertEqual(coordinates(element(app, "wire-3")), [195, 390, 545, 250])
-    }
-
-    @MainActor
-    func testAddedWireEndpointsFollowBothDraggedSymbols() {
-        let app = XCUIApplication()
-        app.launch()
-        connectTemperatureToCAN(app)
         let wire = element(app, "wire-3")
         let startPin = app.buttons["symbol-Temperature-pin-1"]
         let endPin = app.buttons["symbol-CAN-pin-0"]
@@ -232,18 +187,6 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(count.waitForExistence(timeout: 2))
         // The initial Temperature→MCU wire and the added Temperature→CAN wire disappear.
         XCTAssertEqual(count.value as? String, "2")
-    }
-
-    @MainActor
-    func testSameSymbolOppositePinKeepsStartAndCount() {
-        let app = XCUIApplication(); app.launch()
-        app.buttons["配線"].tap()
-        let start = app.buttons["symbol-Temperature-pin-1"]
-        start.tap(); app.buttons["symbol-Temperature-pin-0"].tap()
-        XCTAssertTrue(start.isSelected)
-        XCTAssertFalse(element(app, "wire-3").exists)
-        XCTAssertTrue(app.staticTexts["終点のピンをタップ（直交で自動配線）"].exists)
-        assertWireCount(app, "3")
     }
 
     @MainActor
