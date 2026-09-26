@@ -798,12 +798,4 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(coordinates(element(app,"wire-3")).prefix(2).map { $0 },coordinates(app.buttons["symbol-直流電源-pin-1"]))
         assertRoutesClear(app,count:5,extraSymbols:["直流電源","GND"])
     }
-
-    @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
-    }
 }
