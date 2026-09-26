@@ -618,6 +618,9 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app,"symbol-\(name)").exists)
     }
 
+    /// Two launches in total (circuit symbols, then blocks) instead of one per symbol.
+    /// Symbols go on a grid below the initial diagram so none overlaps another's pins:
+    /// vertical power symbols on one row, everything else on horizontal rows of six.
     @MainActor
     func testCircuitCataloguePlacementKindsAndTerminals() {
         let groups: [(String,[String])] = [
@@ -625,32 +628,58 @@ final class CircuitCanvasUITests: XCTestCase {
             ("受動部品",["抵抗","可変抵抗","コンデンサ","電解コンデンサ","コイル"]),
             ("半導体",["ダイオード","LED","ツェナーダイオード","フォトダイオード"]),
             ("スイッチ・保護",["スイッチ","押しボタン","ヒューズ"]),
-            ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"]),
-            ("ブロック",["DC/DC","MCU","CAN","センサー","汎用ブロック"])
+            ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"])
         ]
+        let app = XCUIApplication(); app.launch()
+        var placed: [(category: String, name: String, x: CGFloat, y: CGFloat)] = []
+        var horizontalCount = 0
         for (category,names) in groups {
             for name in names {
-                let app = XCUIApplication(); app.launch()
-                place(app,category:category,name:name,x:380,y:530)
-                // CAN also exists in the initial diagram; select the newly placed instance.
-                let symbols = app.descendants(matching:.any).matching(identifier:"symbol-\(name)")
-                XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"))
-                XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains(category == "ブロック" ? "style=block" : "style=circuit"))
-                XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].firstMatch.exists)
-                if category != "ブロック" {
-                    let rotation = name == "VCC" ? 270 : category == "電源" ? 90 : 0
-                    XCTAssertEqual(element(app,"symbol-\(name)-rotation").value as? String,"\(rotation)")
-                    let first = coordinates(app.buttons["symbol-\(name)-pin-0"])
-                    XCTAssertEqual(first, rotation == 90 ? [380,480] : rotation == 270 ? [380,580] : [330,530])
-                    if name != "GND" && name != "VCC" {
-                        let second = coordinates(app.buttons["symbol-\(name)-pin-1"])
-                        XCTAssertEqual(second, rotation == 90 ? [380,580] : [430,530])
-                    }
+                let x: CGFloat, y: CGFloat
+                if category == "電源" {
+                    x = 75 + 130 * CGFloat(names.firstIndex(of:name)!); y = 560
+                } else {
+                    x = 75 + 130 * CGFloat(horizontalCount % 6); y = 680 + 90 * CGFloat(horizontalCount / 6)
+                    horizontalCount += 1
                 }
-                XCTAssertEqual(app.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name != "GND" && name != "VCC")
-                app.terminate()
+                place(app,category:category,name:name,x:x,y:y)
+                placed.append((category,name,x,y))
             }
         }
+        for item in placed {
+            let name = item.name
+            let symbols = app.descendants(matching:.any).matching(identifier:"symbol-\(name)")
+            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"), name)
+            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("style=circuit"), name)
+            XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].firstMatch.exists, name)
+            let rotation = name == "VCC" ? 270 : item.category == "電源" ? 90 : 0
+            XCTAssertEqual(element(app,"symbol-\(name)-rotation").value as? String,"\(rotation)", name)
+            let x = Double(item.x), y = Double(item.y)
+            XCTAssertEqual(coordinates(app.buttons["symbol-\(name)-pin-0"]),
+                           rotation == 90 ? [x,y-50] : rotation == 270 ? [x,y+50] : [x-50,y], name)
+            let twoPins = name != "GND" && name != "VCC"
+            if twoPins {
+                XCTAssertEqual(coordinates(app.buttons["symbol-\(name)-pin-1"]),
+                               rotation == 90 ? [x,y+50] : [x+50,y], name)
+            }
+            XCTAssertEqual(app.buttons["symbol-\(name)-pin-1"].firstMatch.exists, twoPins, name)
+        }
+        app.terminate()
+
+        let blocks = ["DC/DC","MCU","CAN","センサー","汎用ブロック"]
+        let blockApp = XCUIApplication(); blockApp.launch()
+        for (index,name) in blocks.enumerated() {
+            place(blockApp,category:"ブロック",name:name,x:100 + 200 * CGFloat(index % 4),y:560 + 110 * CGFloat(index / 4))
+        }
+        for name in blocks {
+            // CAN also exists in the initial diagram; any match is a block.
+            let symbols = blockApp.descendants(matching:.any).matching(identifier:"symbol-\(name)")
+            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"), name)
+            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("style=block"), name)
+            XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-0"].firstMatch.exists, name)
+            XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name)
+        }
+        blockApp.terminate()
     }
 
     @MainActor
