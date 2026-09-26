@@ -95,9 +95,24 @@ else
     GATE_XCRESULT="$RUN_DIR/gate.xcresult"
     log "ゲート: xcodebuild test（テスト専用の端末・並列なし・失敗は 1 回だけ再試行）"
     START=$(date +%s); GATE_EXIT=0
-    xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" \
-      -parallel-testing-enabled NO -retry-tests-on-failure -test-iterations 2 \
-      -resultBundlePath "$GATE_XCRESULT" > "$RUN_DIR/gate.log" 2>&1 || GATE_EXIT=$?
+    # 端末を起動しきってから始める。起動直後は、テストランナーの起動が "Busy" で拒否されることがある。
+    run_gate() {
+      xcrun simctl boot "$SIM_ID" >/dev/null 2>&1 || true
+      xcrun simctl bootstatus "$SIM_ID" -b >/dev/null 2>&1 || true
+      rm -rf "$GATE_XCRESULT"
+      GATE_EXIT=0
+      xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" \
+        -parallel-testing-enabled NO -retry-tests-on-failure -test-iterations 2 \
+        -resultBundlePath "$GATE_XCRESULT" > "$RUN_DIR/gate.log" 2>&1 || GATE_EXIT=$?
+    }
+    run_gate
+    # ランナーが起動できなかった（テストが 1 件も走っていない）ときだけ、もう 1 回やり直す。
+    if [[ $GATE_EXIT -ne 0 ]] && grep -q "Failed to install or launch the test runner" "$RUN_DIR/gate.log"; then
+      log "テストランナーの起動に失敗したため、端末を再起動して、ゲートをやり直します"
+      xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true
+      sleep 5
+      run_gate
+    fi
     WALL=$(( $(date +%s) - START ))
   else
     [[ -n "$GATE_XCRESULT" && -d "$GATE_XCRESULT" ]] || die "--skip-gate には --gate-xcresult（既存の xcresult）が必要です"
