@@ -99,7 +99,7 @@ struct ContentView: View {
                                 if kind.isBlock {
                                     Image(systemName: kind.icon).font(.title3).frame(height: 32)
                                 } else {
-                                    CircuitGlyph(kind:kind, rotation:kind.defaultRotation).scaleEffect(kind.defaultRotation % 180 == 0 ? 0.6 : 0.5).frame(width:70,height:50)
+                                    CircuitGlyph(kind:kind, rotation:kind.defaultRotation).scaleEffect(kind.libraryScale).frame(width:70,height:50)
                                 }
                                 Text(kind.rawValue).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
                             }
@@ -461,6 +461,8 @@ struct ContentView: View {
             .background(.thinMaterial, in: Capsule()).accessibilityIdentifier("operation-hint")
     }
     private var bodies: [CGRect] { symbols.map { $0.kind.body(at:$0.position, rotation:$0.rotation) } }
+    /// Circuit symbols are small, so they get a compact clear margin; blocks keep the default.
+    private var routingMargins: [CGFloat?] { symbols.map { $0.kind.isBlock ? nil : WireRouting.symbolLead } }
     private func direction(at pin: CGPoint) -> WireRouting.Direction? {
         for symbol in symbols where !symbol.kind.isBlock {
             if let index = pins(for:symbol).firstIndex(of:pin) {
@@ -474,7 +476,7 @@ struct ContentView: View {
         for i in wires.indices {
             if wires[i].manual { wires[i].points = WireRouting.reattach(wires[i].manualPoints, start: wires[i].start, end: wires[i].end) }
             else {
-                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end, startDirection:direction(at:wires[i].start), endDirection:direction(at:wires[i].end)), bodies: bodies, occupied: occupied)
+                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end, startDirection:direction(at:wires[i].start), endDirection:direction(at:wires[i].end)), bodies: bodies, occupied: occupied, margins: routingMargins)
                 occupied.append(wires[i].points)
             }
         }
@@ -520,7 +522,7 @@ struct ContentView: View {
               let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let delta = (horizontal ? translation.height : translation.width) / canvasScale
-        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: direction(at:wires[i].start) != nil || direction(at:wires[i].end) != nil ? 24 : 0)
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: direction(at:wires[i].start) != nil || direction(at:wires[i].end) != nil ? WireRouting.symbolLead : 0)
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }
@@ -553,11 +555,13 @@ private struct SymbolCard: View {
     let selectPin: (Int) -> Void
     private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation) }
     private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation) }
+    /// Small symbols still get a finger-sized (44 pt) select / drag target.
+    private var hitSize: CGSize { CGSize(width:max(bounds.width,44), height:max(bounds.height,44)) }
     var body: some View {
         ZStack {
             if !symbol.kind.isBlock {
                 Button(action:select) {
-                    Color.clear.frame(width:bounds.width,height:bounds.height)
+                    Color.clear.frame(width:hitSize.width,height:hitSize.height)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -590,7 +594,7 @@ private struct SymbolCard: View {
 
             }
         }
-        .frame(width: bounds.width, height: bounds.height)
+        .frame(width: hitSize.width, height: hitSize.height)
         .background {
             if symbol.kind.isBlock { RoundedRectangle(cornerRadius: 8).fill(.background) }
         }
@@ -603,6 +607,7 @@ private struct SymbolCard: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(selected ? Color.accentColor.opacity(symbol.kind.isBlock ? 1 : 0.5) : .primary,
                             lineWidth: symbol.kind.isBlock ? (selected ? 3 : 2) : 1)
+                    .frame(width: bounds.width, height: bounds.height)
                     .allowsHitTesting(false)
             }
         }
@@ -612,13 +617,16 @@ private struct SymbolCard: View {
     /// Always upright, never part of the hit area. A zero-size frame anchors the text edge.
     @ViewBuilder private var label: some View {
         let text = Text(symbol.title).font(.system(size:10)).fixedSize()
+        // Pins sitting on the edge the label hangs from (transistors, relays…) need extra room.
+        let below = offsets.contains { abs($0.y - bounds.maxY) < 1 } ? 10 : 0
+        let right = offsets.contains { abs($0.x - bounds.maxX) < 1 } ? 10 : 0
         if symbol.rotation % 180 == 0 {
             text.frame(height:0, alignment:.top)
-                .offset(y:bounds.height/2 + 3)
+                .offset(y:bounds.height/2 + 3 + CGFloat(below))
                 .allowsHitTesting(false).accessibilityHidden(true)
         } else {
             text.frame(width:0, alignment:.leading)
-                .offset(x:bounds.width/2 + 6)
+                .offset(x:bounds.width/2 + 6 + CGFloat(right))
                 .allowsHitTesting(false).accessibilityHidden(true)
         }
     }
@@ -628,12 +636,12 @@ private struct SymbolCard: View {
             Circle()
                 .fill(wireStartPinIndex == index ? Color.accentColor : .clear)
                 .stroke(isConnected ? .green : .orange, lineWidth: 2)
-                .frame(width: 10, height: 10)
-                .frame(width: 32, height: 44)
+                .frame(width: 8, height: 8)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(index == 0 ? "左ピン" : "右ピン")
+        .accessibilityLabel(symbol.kind.pinSpecs[index].name)
         .accessibilityIdentifier("symbol-\(symbol.title)-pin-\(index)")
         .accessibilityValue("\(symbol.position.x + offsets[index].x),\(symbol.position.y + offsets[index].y)")
         .accessibilityAddTraits(wireStartPinIndex == index ? .isSelected : [])

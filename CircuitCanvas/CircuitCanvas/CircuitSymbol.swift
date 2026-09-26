@@ -1,8 +1,8 @@
 import SwiftUI
 
 enum SymbolCategory: String, CaseIterable, Identifiable {
-    case power = "電源", passive = "受動部品", semiconductor = "半導体"
-    case protection = "スイッチ・保護", load = "負荷・その他", block = "ブロック"
+    case power = "電源", passive = "受動部品", semiconductor = "半導体", logic = "ロジック"
+    case protection = "スイッチ・保護", load = "負荷・その他", relayConnector = "リレー・コネクタ", block = "ブロック"
     var id: Self { self }
 }
 
@@ -14,42 +14,108 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     case switchOpen = "スイッチ", pushButton = "押しボタン", fuse = "ヒューズ"
     case lamp = "ランプ", motor = "モーター", speaker = "スピーカー", crystal = "水晶振動子"
     case voltmeter = "電圧計", ammeter = "電流計"
+    case npn = "NPNトランジスタ", pnp = "PNPトランジスタ", nmos = "NチャネルMOSFET", pmos = "PチャネルMOSFET", opAmp = "オペアンプ"
+    case andGate = "ANDゲート", orGate = "ORゲート", nandGate = "NANDゲート", norGate = "NORゲート", xorGate = "XORゲート", notGate = "NOTゲート"
+    case relay = "リレー", connector = "コネクタ"
     case converter = "DC/DC", mcu = "MCU", can = "CAN", sensor = "センサー", block = "汎用ブロック"
     var id: Self { self }
     var category: SymbolCategory {
         switch self {
         case .dc, .battery, .ac, .vcc, .ground: .power
         case .resistor, .variableResistor, .capacitor, .polarizedCapacitor, .inductor: .passive
-        case .diode, .led, .zener, .photodiode: .semiconductor
+        case .diode, .led, .zener, .photodiode, .npn, .pnp, .nmos, .pmos, .opAmp: .semiconductor
+        case .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate: .logic
+        case .relay, .connector: .relayConnector
         case .switchOpen, .pushButton, .fuse: .protection
         case .lamp, .motor, .speaker, .crystal, .voltmeter, .ammeter: .load
         default: .block
         }
     }
     var isBlock: Bool { category == .block }
-    var pinCount: Int { self == .ground || self == .vcc ? 1 : 2 }
+    /// Terminal layout in the unrotated frame (origin at the symbol centre, y down).
+    /// `direction` is the outward direction of the lead before rotation.
+    struct Pin { let name: String; let offset: CGPoint; let direction: WireRouting.Direction }
+    private static func pin(_ name: String, _ x: CGFloat, _ y: CGFloat, _ direction: WireRouting.Direction) -> Pin {
+        Pin(name: name, offset: CGPoint(x: x, y: y), direction: direction)
+    }
+    var pinSpecs: [Pin] {
+        switch self {
+        case .converter, .mcu, .can, .sensor, .block:
+            [Self.pin("左ピン",-75,0,.left), Self.pin("右ピン",75,0,.right)]
+        case .ground, .vcc:
+            [Self.pin("左ピン",-30,0,.left)]
+        case .npn, .pnp:
+            [Self.pin("B（ベース）",-30,0,.left), Self.pin("C（コレクタ）",15,-30,.up), Self.pin("E（エミッタ）",15,30,.down)]
+        case .nmos, .pmos:
+            [Self.pin("G（ゲート）",-30,0,.left), Self.pin("D（ドレイン）",15,-30,.up), Self.pin("S（ソース）",15,30,.down)]
+        case .opAmp:
+            [Self.pin("IN+（非反転入力）",-30,-15,.left), Self.pin("IN−（反転入力）",-30,15,.left), Self.pin("OUT（出力）",30,0,.right)]
+        case .andGate, .orGate, .nandGate, .norGate, .xorGate:
+            [Self.pin("IN1（入力1）",-30,-15,.left), Self.pin("IN2（入力2）",-30,15,.left), Self.pin("OUT（出力）",30,0,.right)]
+        case .notGate:
+            [Self.pin("IN（入力）",-30,0,.left), Self.pin("OUT（出力）",30,0,.right)]
+        case .relay:
+            [Self.pin("コイルA",-15,-30,.up), Self.pin("コイルB",-15,30,.down), Self.pin("COM（共通）",15,-30,.up), Self.pin("NO（常開）",15,30,.down)]
+        case .connector:
+            [Self.pin("P1",-30,-45,.left), Self.pin("P2",-30,-15,.left), Self.pin("P3",-30,15,.left), Self.pin("P4",-30,45,.left)]
+        default:
+            [Self.pin("左ピン",-30,0,.left), Self.pin("右ピン",30,0,.right)]
+        }
+    }
+    var pinCount: Int { pinSpecs.count }
     var defaultRotation: Int { self == .vcc ? 270 : category == .power ? 90 : 0 }
+    /// Coordinate space the vector shape is drawn in (see `CircuitSymbolShape`).
+    var designSize: CGSize {
+        switch self {
+        case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
+            CGSize(width:100,height:100)
+        case .connector: CGSize(width:100,height:200)
+        case .converter, .mcu, .can, .sensor, .block: CGSize(width:150,height:64)
+        default: CGSize(width:100,height:50)
+        }
+    }
+    /// Size of the unrotated body / vector frame. Wires keep out of this rectangle.
+    /// Circuit symbols are the design space at 60 % (30 × 30 body, 15 pt leads); blocks are unscaled.
+    var frameSize: CGSize {
+        switch self {
+        case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
+            CGSize(width:60,height:60)
+        case .connector: CGSize(width:60,height:120)
+        case .converter, .mcu, .can, .sensor, .block: CGSize(width:150,height:64)
+        default: CGSize(width:60,height:30)
+        }
+    }
+    /// Circuit symbols use the two-terminal vector axis (y=25 of a 100 × 50 design frame).
+    var usesAxisLeads: Bool { designSize.height == 50 }
+    /// Scale for the library icon so every frame fits in 70 × 50.
+    var libraryScale: CGFloat {
+        let vertical = defaultRotation % 180 != 0
+        let width = vertical ? frameSize.height : frameSize.width
+        let height = vertical ? frameSize.width : frameSize.height
+        return min(1, 70 / width, 50 / height)
+    }
+    private func rotated(_ point: CGPoint, by angle: Int) -> CGPoint {
+        switch angle {
+        case 90: CGPoint(x: -point.y, y: point.x)
+        case 180: CGPoint(x: -point.x, y: -point.y)
+        case 270: CGPoint(x: point.y, y: -point.x)
+        default: point
+        }
+    }
     func pins(at position: CGPoint, rotation: Int? = nil) -> [CGPoint] {
         let angle = isBlock ? 0 : (rotation ?? defaultRotation)
-        let radius: CGFloat = isBlock ? 75 : 50
-        return (0..<pinCount).map { index in
-            let d = index == 0 ? -radius : radius
-            switch angle {
-            case 90: return CGPoint(x: position.x, y: position.y+d)
-            case 180: return CGPoint(x: position.x-d, y: position.y)
-            case 270: return CGPoint(x: position.x, y: position.y-d)
-            default: return CGPoint(x: position.x+d, y: position.y)
-            }
+        return pinSpecs.map { spec in
+            let offset = rotated(spec.offset, by: angle)
+            return CGPoint(x: position.x + offset.x, y: position.y + offset.y)
         }
     }
     func body(at position: CGPoint, rotation: Int) -> CGRect {
         let vertical = !isBlock && rotation % 180 != 0
-        let size = isBlock ? CGSize(width:150,height:64) :
-            CGSize(width:vertical ? 50 : 100,height:vertical ? 100 : 50)
+        let size = vertical ? CGSize(width: frameSize.height, height: frameSize.width) : frameSize
         return CGRect(x:position.x-size.width/2,y:position.y-size.height/2,width:size.width,height:size.height)
     }
     func direction(for pin: Int, rotation: Int) -> WireRouting.Direction {
-        WireRouting.Direction(rawValue: ((isBlock ? 0 : rotation/90) + pin*2) % 4)!
+        WireRouting.Direction(rawValue: (pinSpecs[pin].direction.rawValue + (isBlock ? 0 : rotation/90)) % 4)!
     }
     var letter: String? {
         switch self { case .motor: "M"; case .voltmeter: "V"; case .ammeter: "A"; default: nil }
@@ -65,8 +131,10 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Vector construction space: 100 × 50 with the terminal axis at y=25.
-/// The body is a 50 × 50 square at x=25...75; the leads reach the pins at x=0 / x=100.
+/// Vector construction space is the kind's `designSize`; the view scales it to `frameSize`.
+/// Two-terminal symbols: 100 × 50 with the terminal axis at y=25; the body is a 50 × 50 square
+/// at x=25...75 and the leads reach the pins at x=0 / x=100.
+/// Multi-terminal symbols: 100 × 100 (connector 100 × 200); every pin lies on the frame edge.
 struct CircuitSymbolShape: Shape {
     let kind: SymbolKind
     func path(in rect: CGRect) -> Path {
@@ -79,11 +147,22 @@ struct CircuitSymbolShape: Shape {
         }
         func bar(_ x: CGFloat, _ half: CGFloat) { line([(x,25-half),(x,25+half)]) }
         func circle() { p.addEllipse(in: CGRect(x:25,y:0,width:50,height:50)) }
-        func arrow(_ a: CGPoint, _ b: CGPoint) {
+        func arrow(_ a: CGPoint, _ b: CGPoint, head: CGFloat = 4) {
             line([(a.x,a.y),(b.x,b.y)])
             let angle = atan2(b.y-a.y,b.x-a.x)
-            line([(b.x-4*cos(angle-0.5),b.y-4*sin(angle-0.5)),(b.x,b.y),
-                  (b.x-4*cos(angle+0.5),b.y-4*sin(angle+0.5))])
+            line([(b.x-head*cos(angle-0.5),b.y-head*sin(angle-0.5)),(b.x,b.y),
+                  (b.x-head*cos(angle+0.5),b.y-head*sin(angle+0.5))])
+        }
+        func dot(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) { p.addEllipse(in: CGRect(x:x-r,y:y-r,width:2*r,height:2*r)) }
+        /// Logic gates share the input leads (x=0 → `inX`) and the output lead (`outX` → 100).
+        func gate(inX: CGFloat, outX: CGFloat) {
+            line([(0,25),(inX,25)]); line([(0,75),(inX,75)]); line([(outX,50),(100,50)])
+        }
+        func orBody(left: CGFloat, tip: CGFloat) {
+            p.move(to: CGPoint(x:left,y:20))
+            p.addQuadCurve(to: CGPoint(x:tip,y:50), control: CGPoint(x:tip-25,y:20))
+            p.addQuadCurve(to: CGPoint(x:left,y:80), control: CGPoint(x:tip-25,y:80))
+            p.addQuadCurve(to: CGPoint(x:left,y:20), control: CGPoint(x:left+20,y:50))
         }
         switch kind {
         case .dc:
@@ -137,11 +216,58 @@ struct CircuitSymbolShape: Shape {
             line([(39,17),(75,4),(75,46),(39,33)])
         case .crystal:
             bar(25,15); bar(75,15); p.addRect(CGRect(x:37,y:12,width:26,height:26))
+        case .npn, .pnp:
+            line([(0,50),(45,50)]); line([(45,30),(45,70)])
+            p.addEllipse(in: CGRect(x:28,y:20,width:60,height:60))
+            line([(75,0),(75,20),(45,38)])
+            line([(75,100),(75,80),(45,62)])
+            let base = CGPoint(x:48,y:64), tip = CGPoint(x:68,y:77)
+            if kind == .npn { arrow(base, tip, head: 7) } else { arrow(tip, base, head: 7) }
+        case .nmos, .pmos:
+            line([(0,50),(35,50)]); line([(35,30),(35,70)])
+            for range in [(28.0,40.0),(44.0,56.0),(60.0,72.0)] { line([(45,range.0),(45,range.1)]) }
+            line([(75,0),(75,34),(45,34)]); line([(75,100),(75,66),(45,66)]); line([(75,66),(75,50)])
+            if kind == .nmos { arrow(CGPoint(x:75,y:50), CGPoint(x:47,y:50), head: 6) }
+            else { arrow(CGPoint(x:47,y:50), CGPoint(x:75,y:50), head: 6) }
+        case .opAmp:
+            line([(25,5),(25,95),(85,50),(25,5)])
+            line([(0,25),(25,25)]); line([(0,75),(25,75)]); line([(85,50),(100,50)])
+        case .andGate, .nandGate:
+            let bubble = kind == .nandGate
+            gate(inX: 30, outX: bubble ? 88 : 80)
+            p.move(to: CGPoint(x:30,y:20)); p.addLine(to: CGPoint(x:50,y:20))
+            p.addArc(center: CGPoint(x:50,y:50), radius: 30, startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: false)
+            p.addLine(to: CGPoint(x:30,y:80)); p.closeSubpath()
+            if bubble { dot(84,50,4) }
+        case .orGate, .norGate, .xorGate:
+            let bubble = kind == .norGate
+            let left: CGFloat = kind == .xorGate ? 31 : 25
+            gate(inX: left + 3, outX: bubble ? 88 : 85)
+            orBody(left: left, tip: bubble ? 80 : 85)
+            if bubble { dot(84,50,4) }
+            if kind == .xorGate {
+                p.move(to: CGPoint(x:19,y:20)); p.addQuadCurve(to: CGPoint(x:19,y:80), control: CGPoint(x:39,y:50))
+                line([(0,25),(22,25)]); line([(0,75),(22,75)])
+            }
+        case .notGate:
+            line([(25,25),(25,75),(75,50),(25,25)]); dot(79,50,4)
+            line([(0,50),(25,50)]); line([(83,50),(100,50)])
+        case .relay:
+            p.addRect(CGRect(x:13,y:30,width:24,height:40))
+            line([(25,0),(25,30)]); line([(25,70),(25,100)])
+            line([(75,0),(75,28),(66,64)]); line([(75,100),(75,74)]); dot(75,71,3)
+            line([(41,50),(47,50)]); line([(52,50),(58,50)])
+        case .connector:
+            p.addRect(CGRect(x:40,y:5,width:30,height:190))
+            for y: CGFloat in [25,75,125,175] { line([(0,y),(40,y)]); dot(55,y,4) }
         default: break
         }
-        line([(0,25),(leftEnd,25)])
-        if kind.pinCount == 2 { line([(rightEnd,25),(100,25)]) }
-        return p.applying(CGAffineTransform(scaleX: rect.width/100, y: rect.height/50)
+        if kind.usesAxisLeads {
+            line([(0,25),(leftEnd,25)])
+            if kind.pinCount == 2 { line([(rightEnd,25),(100,25)]) }
+        }
+        let frame = kind.designSize
+        return p.applying(CGAffineTransform(scaleX: rect.width/frame.width, y: rect.height/frame.height)
             .concatenating(CGAffineTransform(translationX: rect.minX,y: rect.minY)))
     }
 }
@@ -152,22 +278,25 @@ struct CircuitGlyph: View {
     let rotation: Int
     private func marker(_ text: String, _ dx: CGFloat, _ dy: CGFloat) -> some View {
         let radians = Double(rotation) * .pi / 180
-        return Text(text).font(.system(size:10,weight:.bold))
-            .offset(x:dx*cos(radians)-dy*sin(radians), y:dx*sin(radians)+dy*cos(radians))
+        let x = dx * 0.6, y = dy * 0.6
+        return Text(text).font(.system(size:7,weight:.bold))
+            .offset(x:x*cos(radians)-y*sin(radians), y:x*sin(radians)+y*cos(radians))
     }
     var body: some View {
         ZStack {
-            CircuitSymbolShape(kind: kind).stroke(.primary, lineWidth: 2)
-                .frame(width:100,height:50)
+            CircuitSymbolShape(kind: kind).stroke(.primary, lineWidth: 1.5)
+                .frame(width:kind.frameSize.width,height:kind.frameSize.height)
                 .rotationEffect(.degrees(Double(rotation)))
             switch kind {
             case .polarizedCapacitor: marker("+",-15,-15)
             case .dc: marker("+",-17,-14); marker("−",17,-12)
             case .battery: marker("+",-25,-14); marker("−",25,-12)
+            case .opAmp: marker("+",-15,-25); marker("−",-15,25)
             default: EmptyView()
             }
-            if let letter = kind.letter { Text(letter).font(.system(size:16,weight:.medium)) }
+            if let letter = kind.letter { Text(letter).font(.system(size:10,weight:.medium)) }
         }
-        .frame(width:rotation % 180 == 0 ? 100 : 50,height:rotation % 180 == 0 ? 50 : 100)
+        .frame(width:rotation % 180 == 0 ? kind.frameSize.width : kind.frameSize.height,
+               height:rotation % 180 == 0 ? kind.frameSize.height : kind.frameSize.width)
     }
 }

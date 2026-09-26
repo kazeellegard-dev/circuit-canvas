@@ -40,10 +40,14 @@ enum WireRouting {
         return result
     }
     /// Preserve room around bodies, reducing each facing margin in narrow gaps.
-    static func routingBounds(_ bodies: [CGRect]) -> [CGRect] {
-        bodies.map { body in
-            var left: CGFloat = 24, right: CGFloat = 24
-            var top: CGFloat = body.width == 50 ? 24 : 20
+    /// `margins[i]` overrides the clear space around `bodies[i]` (circuit symbols are small, so they
+    /// use a compact margin); `nil` or a missing entry keeps the block-diagram default.
+    static let symbolLead: CGFloat = 15
+    static func routingBounds(_ bodies: [CGRect], margins: [CGFloat?] = []) -> [CGRect] {
+        bodies.enumerated().map { index, body in
+            let custom = index < margins.count ? margins[index] : nil
+            var left: CGFloat = custom ?? 24, right: CGFloat = custom ?? 24
+            var top: CGFloat = custom ?? (body.width == 50 ? 24 : 20)
             var bottom = top
             for other in bodies where other != body {
                 if other.maxY > body.minY && other.minY < body.maxY {
@@ -98,26 +102,26 @@ enum WireRouting {
     /// A wire is never left undrawn: when the preferred route does not fit (symbols placed
     /// close together), relax the margins, then the lead-out length, then the overlap rule,
     /// and finally fall back to a plain orthogonal path.
-    static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]]) -> [CGPoint] {
+    static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]], margins: [CGFloat?] = []) -> [CGPoint] {
         let attempts: [(lead: CGFloat, margin: Bool, avoidOccupied: Bool)] = [
-            (24, true, true), (24, false, true), (12, false, true), (12, false, false)
+            (symbolLead, true, true), (symbolLead, false, true), (8, false, true), (8, false, false)
         ]
         for attempt in attempts {
             let path = plannedRoute(wire, bodies: bodies, occupied: attempt.avoidOccupied ? occupied : [],
-                                    leadLength: attempt.lead, margin: attempt.margin)
+                                    leadLength: attempt.lead, margin: attempt.margin, margins: margins)
             if !path.isEmpty { return path }
         }
         func stub(_ pin: CGPoint, _ direction: Direction?) -> CGPoint {
             guard let v = direction?.vector else { return pin }
-            return CGPoint(x:pin.x+v.x*12,y:pin.y+v.y*12)
+            return CGPoint(x:pin.x+v.x*8,y:pin.y+v.y*8)
         }
         let s = stub(wire.start, wire.startDirection), e = stub(wire.end, wire.endDirection)
         return simplify([wire.start, s, CGPoint(x:e.x,y:s.y), e, wire.end])
     }
 
     private static func plannedRoute(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]],
-                                     leadLength: CGFloat, margin: Bool) -> [CGPoint] {
-        let bounds = margin ? routingBounds(bodies) : bodies
+                                     leadLength: CGFloat, margin: Bool, margins: [CGFloat?]) -> [CGPoint] {
+        let bounds = margin ? routingBounds(bodies, margins: margins) : bodies
         func lead(_ pin: CGPoint, direction: Direction?) -> CGPoint {
             if let direction {
                 let v = direction.vector
