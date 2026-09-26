@@ -41,7 +41,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     var pinSpecs: [Pin] {
         switch self {
         case .converter, .mcu, .can, .sensor, .block:
-            [Self.pin("左ピン",-75,0,.left), Self.pin("右ピン",75,0,.right)]
+            [Self.pin("左ピン",-45,0,.left), Self.pin("右ピン",45,0,.right)]
         case .ground, .vcc:
             [Self.pin("左ピン",-30,0,.left)]
         case .npn, .pnp:
@@ -70,18 +70,18 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
             CGSize(width:100,height:100)
         case .connector: CGSize(width:100,height:200)
-        case .converter, .mcu, .can, .sensor, .block: CGSize(width:150,height:64)
+        case .converter, .mcu, .can, .sensor, .block: CGSize(width:90,height:30)
         default: CGSize(width:100,height:50)
         }
     }
     /// Size of the unrotated body / vector frame. Wires keep out of this rectangle.
-    /// Circuit symbols are the design space at 60 % (30 × 30 body, 15 pt leads); blocks are unscaled.
+    /// Circuit symbols are the design space at 60 % (30 × 30 body, 15 pt leads); blocks are 90 × 30.
     var frameSize: CGSize {
         switch self {
         case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
             CGSize(width:60,height:60)
         case .connector: CGSize(width:60,height:120)
-        case .converter, .mcu, .can, .sensor, .block: CGSize(width:150,height:64)
+        case .converter, .mcu, .can, .sensor, .block: CGSize(width:90,height:30)
         default: CGSize(width:60,height:30)
         }
     }

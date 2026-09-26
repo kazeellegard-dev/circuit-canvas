@@ -108,7 +108,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(canRight.isSelected)
         XCTAssertFalse(element(app, "wire-3").exists)
         temperatureLeft.tap()
-        XCTAssertEqual(coordinates(element(app, "wire-3")), [695, 250, 45, 390])
+        XCTAssertEqual(coordinates(element(app, "wire-3")), [665, 250, 75, 390])
         // A start pin that was reset can be reused as the end pin, with matching coordinates.
         app.buttons["配線"].tap()
         temperatureRight.tap()
@@ -121,7 +121,7 @@ final class CircuitCanvasUITests: XCTestCase {
         let wire = element(app, "wire-4")
         XCTAssertTrue(wire.waitForExistence(timeout: 2))
         // Compare numeric coordinates: accessibility may include trailing zeros.
-        XCTAssertEqual(coordinates(wire), [695, 250, 195, 390])
+        XCTAssertEqual(coordinates(wire), [665, 250, 165, 390])
         XCTAssertEqual(coordinates(wire), coordinates(canRight) + coordinates(temperatureRight))
         assertWireCount(app, "5")
     }
@@ -140,12 +140,12 @@ final class CircuitCanvasUITests: XCTestCase {
             let symbol = element(app, "symbol-\(name)")
             let left = app.buttons["symbol-\(name)-pin-0"].frame
             let right = app.buttons["symbol-\(name)-pin-1"].frame
-            // At the initial 100% viewport the model's ±75pt must match the UI.
-            XCTAssertEqual(left.midX, symbol.frame.midX - 75, accuracy: 1)
-            XCTAssertEqual(right.midX, symbol.frame.midX + 75, accuracy: 1)
+            // At the initial 100% viewport the model's ±45pt must match the UI.
+            XCTAssertEqual(left.midX, symbol.frame.midX - 45, accuracy: 1)
+            XCTAssertEqual(right.midX, symbol.frame.midX + 45, accuracy: 1)
             XCTAssertEqual(left.midY, right.midY, accuracy: 1)
         }
-        XCTAssertEqual(coordinates(element(app, "wire-3")), [195, 390, 545, 250])
+        XCTAssertEqual(coordinates(element(app, "wire-3")), [165, 390, 575, 250])
         let wire = element(app, "wire-3")
         let startPin = app.buttons["symbol-Temperature-pin-1"]
         let endPin = app.buttons["symbol-CAN-pin-0"]
@@ -217,22 +217,25 @@ final class CircuitCanvasUITests: XCTestCase {
         }
     }
 
+    /// Bodies of the four initial blocks (90 × 30) plus any circuit symbols, each with the outward
+    /// lead wires must keep: 24pt at block pins, 15pt at circuit-symbol pins.
     @MainActor
     private func assertRoutesClear(_ app: XCUIApplication, count: Int, extraSymbols: [String] = []) {
-        let bodies = (["24 V → 5 V","Main MCU","CAN","Temperature"] + extraSymbols).map { name -> CGRect in
+        let entries = (["24 V → 5 V","Main MCU","CAN","Temperature"] + extraSymbols).map { name -> (rect: CGRect, lead: CGFloat) in
             let xy = coordinates(app.buttons["symbol-\(name)-pin-0"])
             let angle = element(app,"symbol-\(name)-rotation")
             if angle.exists {
                 let rotation = Int(angle.value as? String ?? "0") ?? 0
                 switch rotation {
-                case 90: return CGRect(x:xy[0]-25,y:xy[1],width:50,height:100)
-                case 180: return CGRect(x:xy[0]-100,y:xy[1]-25,width:100,height:50)
-                case 270: return CGRect(x:xy[0]-25,y:xy[1]-100,width:50,height:100)
-                default: return CGRect(x:xy[0],y:xy[1]-25,width:100,height:50)
+                case 90: return (CGRect(x:xy[0]-15,y:xy[1],width:30,height:60),15)
+                case 180: return (CGRect(x:xy[0]-60,y:xy[1]-15,width:60,height:30),15)
+                case 270: return (CGRect(x:xy[0]-15,y:xy[1]-60,width:30,height:60),15)
+                default: return (CGRect(x:xy[0],y:xy[1]-15,width:60,height:30),15)
                 }
             }
-            return CGRect(x:xy[0],y:xy[1]-32,width:150,height:64)
+            return (CGRect(x:xy[0],y:xy[1]-15,width:90,height:30),24)
         }
+        let bodies = entries.map(\.rect)
         var routes: [[CGPoint]] = []
         for i in 0..<count {
             let points = routePoints(app,i)
@@ -270,21 +273,22 @@ final class CircuitCanvasUITests: XCTestCase {
                 }
             }
             for (pin,next) in [(points[0],points[1]),(points.last!,points[points.count-2])] {
-                if let body = bodies.first(where: { $0.midX == pin.x && ($0.minY == pin.y || $0.maxY == pin.y) }) {
+                if let entry = entries.first(where: { $0.rect.midX == pin.x && ($0.rect.minY == pin.y || $0.rect.maxY == pin.y) }) {
                     XCTAssertEqual(pin.x,next.x)
-                    XCTAssertTrue(body.minY == pin.y ? next.y < pin.y : next.y > pin.y)
-                    XCTAssertGreaterThanOrEqual(abs(next.y-pin.y),24)
+                    XCTAssertTrue(entry.rect.minY == pin.y ? next.y < pin.y : next.y > pin.y)
+                    XCTAssertGreaterThanOrEqual(abs(next.y-pin.y),entry.lead)
                     continue
                 }
                 XCTAssertEqual(pin.y,next.y)
-                let left = bodies.contains { $0.minX == pin.x && $0.midY == pin.y }
+                let owner = entries.first { $0.rect.midY == pin.y && ($0.rect.minX == pin.x || $0.rect.maxX == pin.x) }
+                let left = owner.map { $0.rect.minX == pin.x } ?? false
                 XCTAssertTrue(left ? next.x < pin.x : next.x > pin.x)
                 let gaps = bodies.filter { $0.minY < pin.y && $0.maxY > pin.y }.compactMap { body -> CGFloat? in
                     if left && body.maxX < pin.x { return pin.x-body.maxX }
                     if !left && body.minX > pin.x { return body.minX-pin.x }
                     return nil
                 }
-                XCTAssertGreaterThanOrEqual(abs(next.x-pin.x), min(24,(gaps.min() ?? 48)/2)-0.1)
+                XCTAssertGreaterThanOrEqual(abs(next.x-pin.x), min(owner?.lead ?? 24,(gaps.min() ?? 48)/2)-0.1)
             }
             routes.append(points)
         }
@@ -301,8 +305,8 @@ final class CircuitCanvasUITests: XCTestCase {
             app.buttons["symbol-\(pair.2)-pin-\(pair.3)"].tap()
             assertRoutesClear(app,count:4+i)
             let expected = i == 0
-                ? "259.0,390.0;271.0,250.0;521.0,250.0"
-                : "259.0,390.0;271.0,250.0;469.0,250.0;469.0,390.0;521.0,250.0"
+                ? "189.0,390.0;301.0,250.0;551.0,250.0"
+                : "189.0,390.0;289.0,390.0;301.0,250.0;439.0,250.0;551.0,250.0"
             XCTAssertEqual(element(app,"canvas-junctions").value as? String,expected)
         }
         let symbol = element(app,"symbol-Main MCU")
@@ -310,7 +314,7 @@ final class CircuitCanvasUITests: XCTestCase {
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:48,dy:48)))
         assertRoutesClear(app,count:6)
         XCTAssertNotEqual(element(app,"canvas-junctions").value as? String,
-                          "259.0,390.0;271.0,250.0;469.0,250.0;469.0,390.0;521.0,250.0")
+                          "189.0,390.0;289.0,390.0;301.0,250.0;439.0,250.0;551.0,250.0")
         let junctions = Set((element(app,"canvas-junctions").value as? String ?? "").split(separator:";"))
         XCTAssertFalse(junctions.isEmpty)
         for index in 0..<6 {
@@ -323,7 +327,7 @@ final class CircuitCanvasUITests: XCTestCase {
     func testCloseSymbolsRetainMaximumAvailableLead() {
         let app = XCUIApplication(); app.launch()
         let source = element(app,"symbol-CAN").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-70,dy:0)))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-130,dy:0)))
         app.buttons["配線"].tap()
         app.buttons["symbol-Main MCU-pin-1"].tap()
         app.buttons["symbol-CAN-pin-1"].tap()
@@ -331,22 +335,22 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(path.count,4)
         guard path.count >= 4 else { return }
         let left = coordinates(app.buttons["symbol-CAN-pin-0"])
-        XCTAssertEqual(path[1].x-path[0].x,CGFloat((left[0]-445)/2),accuracy:1)
+        XCTAssertEqual(path[1].x-path[0].x,CGFloat((left[0]-415)/2),accuracy:1)
         XCTAssertEqual(path[0].y,path[1].y)
-        XCTAssertEqual(coordinates(element(app,"wire-3")),[445,250,left[0]+150,left[1]])
+        XCTAssertEqual(coordinates(element(app,"wire-3")),[415,250,left[0]+90,left[1]])
     }
 
     @MainActor
     func testJunctionsTrackSharedPinsAndSegmentDrags() {
         let app = XCUIApplication(); app.launch()
         let dots = element(app,"canvas-junctions")
-        XCTAssertEqual(dots.value as? String,"271.0,250.0")
+        XCTAssertEqual(dots.value as? String,"301.0,250.0")
         XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
         let endpoint = coordinates(element(app,"wire-0"))
         let viewport = element(app,"circuit-canvas").value as? String
         let source = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-20,dy:0)))
-        XCTAssertEqual(dots.value as? String,"271.0,250.0")
+        XCTAssertEqual(dots.value as? String,"301.0,250.0")
         XCTAssertEqual(coordinates(element(app,"wire-0")),endpoint)
         XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
         // Move the other terminal trunk to the pin: there is no shared run left.
@@ -355,14 +359,14 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(dots.value as? String,"")
         let restore = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         restore.press(forDuration:0.2,thenDragTo:restore.withOffset(CGVector(dx:-44,dy:0)))
-        XCTAssertEqual(dots.value as? String,"271.0,250.0")
+        XCTAssertEqual(dots.value as? String,"301.0,250.0")
         app.buttons["配線"].tap()
         app.buttons["symbol-24 V → 5 V-pin-0"].tap()
         app.buttons["symbol-Main MCU-pin-0"].tap()
         let values = (dots.value as? String ?? "").split(separator:";")
         XCTAssertFalse(values.isEmpty)
         XCTAssertEqual(Set(values).count,values.count)
-        XCTAssertEqual(coordinates(element(app,"wire-3")),[45,160,295,250])
+        XCTAssertEqual(coordinates(element(app,"wire-3")),[75,160,325,250])
         assertWireCount(app,"4")
     }
 
@@ -402,16 +406,16 @@ final class CircuitCanvasUITests: XCTestCase {
         let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:200,dy:0)))
         let after = routePoints(app,0)
-        XCTAssertEqual(after[1].x,295,accuracy:0.1)
-        XCTAssertEqual(after[2].x,295,accuracy:0.1)
-        XCTAssertEqual(coordinates(element(app,"wire-0")),[195,160,295,250])
+        XCTAssertEqual(after[1].x,325,accuracy:0.1)
+        XCTAssertEqual(after[2].x,325,accuracy:0.1)
+        XCTAssertEqual(coordinates(element(app,"wire-0")),[165,160,325,250])
     }
 
     // Start through viewport coordinates, independently of the tiny accessibility
     // target. Both sides of the short line must work when the background gets input.
     /// One launch for the short-line / crossing scenarios that used to be six tests.
     /// After the initial nudge of wire 0 (which makes wire 2's short horizontal line cross it),
-    /// every variant moves wire 2's short line up by 97pt and puts it back, so the next variant
+    /// every variant moves wire 2's short line up by 150pt and puts it back, so the next variant
     /// starts from the same state:
     ///  - touches on the visible line through viewport coordinates (both sides, and diagonal),
     ///  - touches on the accessibility target (straight and diagonal),
@@ -425,8 +429,8 @@ final class CircuitCanvasUITests: XCTestCase {
             let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
             source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
         }
-        drag("wire-0-segment-1",-6,0)
-        XCTAssertEqual(routePoints(app,0)[1].x,265,accuracy:1)
+        drag("wire-0-segment-1",-10,0)
+        XCTAssertEqual(routePoints(app,0)[1].x,291,accuracy:1)
         let canvas = element(app,"circuit-canvas")
         let viewport = canvas.value as? String
         let before = routePoints(app,2)
@@ -438,9 +442,9 @@ final class CircuitCanvasUITests: XCTestCase {
             XCTAssertEqual(after.count,before.count)
             for i in before.indices {
                 XCTAssertEqual(after[i].x,before[i].x,accuracy:xAccuracy)
-                XCTAssertEqual(after[i].y,before[i].y - ([2,3].contains(i) ? 97 : 0),accuracy:1)
+                XCTAssertEqual(after[i].y,before[i].y - ([2,3].contains(i) ? 150 : 0),accuracy:1)
             }
-            XCTAssertEqual(coordinates(element(app,"wire-0-hops")),[265,205])
+            XCTAssertEqual(coordinates(element(app,"wire-0-hops")),[291,205])
         }
         func assertRestored(_ restored: [CGPoint]) {
             XCTAssertEqual(restored.count,before.count)
@@ -456,30 +460,30 @@ final class CircuitCanvasUITests: XCTestCase {
         // Viewport touches: -1 / +1 of the line's midpoint (must not pan), and a diagonal one.
         for (touchOffset, diagonal) in [(CGFloat(-1),CGFloat(0)),(1,0),(0,18)] {
             let source = origin.withOffset(CGVector(dx:(before[2].x+before[3].x)/2+touchOffset,dy:before[2].y))
-            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:diagonal,dy:-97)))
+            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:diagonal,dy:-150)))
             assertMoved(routePoints(app,2),xAccuracy:1)
             XCTAssertEqual(canvas.value as? String,viewport)
             let after = routePoints(app,2)
             let back = origin.withOffset(CGVector(dx:(after[2].x+after[3].x)/2,dy:after[2].y))
-            back.press(forDuration:0.2,thenDragTo:back.withOffset(CGVector(dx:-diagonal,dy:97)))
+            back.press(forDuration:0.2,thenDragTo:back.withOffset(CGVector(dx:-diagonal,dy:150)))
             XCTAssertEqual(routePoints(app,2),before)
             assertRestored(routePoints(app,2))
         }
 
         // Accessibility target: straight (must not select the adjacent vertical line) and diagonal.
         for diagonal in [CGFloat(0),18] {
-            drag("wire-2-segment-2",diagonal,-97)
+            drag("wire-2-segment-2",diagonal,-150)
             assertMoved(routePoints(app,2),xAccuracy:0.1)
             XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
             XCTAssertEqual(canvas.value as? String,viewport)
-            drag("wire-2-segment-2",-diagonal,97)
+            drag("wire-2-segment-2",-diagonal,150)
             assertRestored(routePoints(app,2))
         }
         XCTAssertEqual(["24 V → 5 V","Main MCU","CAN","Temperature"].map { element(app,"symbol-\($0)").value as? String },symbols)
 
         // The crossing arc appears with the move and disappears when the other wire moves away.
         let wire0Endpoints = coordinates(element(app,"wire-0"))
-        drag("wire-2-segment-2",0,-97)
+        drag("wire-2-segment-2",0,-150)
         XCTAssertEqual(routePoints(app,2)[2].y,205,accuracy:1)
         let hops = element(app,"wire-0-hops")
         XCTAssertFalse((hops.value as? String ?? "").isEmpty)
@@ -496,7 +500,7 @@ final class CircuitCanvasUITests: XCTestCase {
         let app = XCUIApplication(); app.launch()
         let before = routePoints(app,2)
         let canvas = element(app,"circuit-canvas")
-        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:265,dy:420))
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:291,dy:473))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
         XCTAssertEqual(routePoints(app,2),before)
         XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=0, offsetY=-97")
@@ -510,20 +514,35 @@ final class CircuitCanvasUITests: XCTestCase {
         item.tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero)
             .withOffset(CGVector(dx:x,dy:y)).tap()
-        XCTAssertTrue(element(app,"symbol-\(name)").exists)
+        XCTAssertTrue(element(app,"symbol-\(name)").exists, "placing \(name) at \(x),\(y)")
     }
+
+    /// Pin offsets of the multi-terminal symbols at rotation 0 (centre origin, y down), by kind name.
+    private let multiTerminalPins: [String: [(CGFloat,CGFloat)]] = [
+        "NPNトランジスタ": [(-30,0),(15,-30),(15,30)], "PNPトランジスタ": [(-30,0),(15,-30),(15,30)],
+        "NチャネルMOSFET": [(-30,0),(15,-30),(15,30)], "PチャネルMOSFET": [(-30,0),(15,-30),(15,30)],
+        "オペアンプ": [(-30,-15),(-30,15),(30,0)],
+        "ANDゲート": [(-30,-15),(-30,15),(30,0)], "ORゲート": [(-30,-15),(-30,15),(30,0)],
+        "NANDゲート": [(-30,-15),(-30,15),(30,0)], "NORゲート": [(-30,-15),(-30,15),(30,0)],
+        "XORゲート": [(-30,-15),(-30,15),(30,0)], "NOTゲート": [(-30,0),(30,0)],
+        "リレー": [(-15,-30),(-15,30),(15,-30),(15,30)],
+        "コネクタ": [(-30,-45),(-30,-15),(-30,15),(-30,45)]
+    ]
 
     /// Two launches in total (circuit symbols, then blocks) instead of one per symbol.
     /// Symbols go on a grid below the initial diagram so none overlaps another's pins:
-    /// vertical power symbols on one row, everything else on horizontal rows of six.
+    /// vertical power symbols on one row, everything else on horizontal rows of nine.
     @MainActor
     func testCircuitCataloguePlacementKindsAndTerminals() {
         let groups: [(String,[String])] = [
             ("電源",["直流電源","電池","交流電源","VCC","GND"]),
             ("受動部品",["抵抗","可変抵抗","コンデンサ","電解コンデンサ","コイル"]),
-            ("半導体",["ダイオード","LED","ツェナーダイオード","フォトダイオード"]),
+            ("半導体",["ダイオード","LED","ツェナーダイオード","フォトダイオード",
+                    "NPNトランジスタ","PNPトランジスタ","NチャネルMOSFET","PチャネルMOSFET","オペアンプ"]),
+            ("ロジック",["ANDゲート","ORゲート","NANDゲート","NORゲート","XORゲート","NOTゲート"]),
             ("スイッチ・保護",["スイッチ","押しボタン","ヒューズ"]),
-            ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"])
+            ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"]),
+            ("リレー・コネクタ",["リレー","コネクタ"])
         ]
         let app = XCUIApplication(); app.launch()
         var placed: [(category: String, name: String, x: CGFloat, y: CGFloat)] = []
@@ -532,9 +551,9 @@ final class CircuitCanvasUITests: XCTestCase {
             for name in names {
                 let x: CGFloat, y: CGFloat
                 if category == "電源" {
-                    x = 75 + 130 * CGFloat(names.firstIndex(of:name)!); y = 560
+                    x = 75 + 110 * CGFloat(names.firstIndex(of:name)!); y = 560
                 } else {
-                    x = 75 + 130 * CGFloat(horizontalCount % 6); y = 680 + 90 * CGFloat(horizontalCount / 6)
+                    x = 60 + 85 * CGFloat(horizontalCount % 9); y = 660 + 80 * CGFloat(horizontalCount / 9)
                     horizontalCount += 1
                 }
                 place(app,category:category,name:name,x:x,y:y)
@@ -546,18 +565,22 @@ final class CircuitCanvasUITests: XCTestCase {
             let symbols = app.descendants(matching:.any).matching(identifier:"symbol-\(name)")
             XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"), name)
             XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("style=circuit"), name)
-            XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].firstMatch.exists, name)
             let rotation = name == "VCC" ? 270 : item.category == "電源" ? 90 : 0
             XCTAssertEqual(element(app,"symbol-\(name)-rotation").value as? String,"\(rotation)", name)
             let x = Double(item.x), y = Double(item.y)
-            XCTAssertEqual(coordinates(app.buttons["symbol-\(name)-pin-0"]),
-                           rotation == 90 ? [x,y-50] : rotation == 270 ? [x,y+50] : [x-50,y], name)
-            let twoPins = name != "GND" && name != "VCC"
-            if twoPins {
-                XCTAssertEqual(coordinates(app.buttons["symbol-\(name)-pin-1"]),
-                               rotation == 90 ? [x,y+50] : [x+50,y], name)
+            let offsets: [(Double,Double)]
+            if let table = multiTerminalPins[name] {
+                offsets = table.map { (Double($0.0),Double($0.1)) }
+            } else if name == "GND" || name == "VCC" {
+                offsets = [rotation == 90 ? (0,-30) : (0,30)]
+            } else {
+                offsets = rotation == 90 ? [(0,-30),(0,30)] : [(-30,0),(30,0)]
             }
-            XCTAssertEqual(app.buttons["symbol-\(name)-pin-1"].firstMatch.exists, twoPins, name)
+            for (index,offset) in offsets.enumerated() {
+                XCTAssertEqual(coordinates(app.buttons["symbol-\(name)-pin-\(index)"].firstMatch),
+                               [x+offset.0,y+offset.1], "\(name) pin \(index)")
+            }
+            XCTAssertFalse(app.buttons["symbol-\(name)-pin-\(offsets.count)"].firstMatch.exists, name)
         }
         app.terminate()
 
@@ -566,13 +589,19 @@ final class CircuitCanvasUITests: XCTestCase {
         for (index,name) in blocks.enumerated() {
             place(blockApp,category:"ブロック",name:name,x:100 + 200 * CGFloat(index % 4),y:560 + 110 * CGFloat(index / 4))
         }
-        for name in blocks {
+        for (index,name) in blocks.enumerated() {
             // CAN also exists in the initial diagram; any match is a block.
             let symbols = blockApp.descendants(matching:.any).matching(identifier:"symbol-\(name)")
             XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"), name)
             XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("style=block"), name)
             XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-0"].firstMatch.exists, name)
             XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name)
+            if name != "CAN" {
+                // Blocks are 90 × 30 with the pins on the axis at ±45.
+                let x = Double(100 + 200 * (index % 4)), y = Double(560 + 110 * (index / 4))
+                XCTAssertEqual(coordinates(blockApp.buttons["symbol-\(name)-pin-0"]),[x-45,y], name)
+                XCTAssertEqual(coordinates(blockApp.buttons["symbol-\(name)-pin-1"]),[x+45,y], name)
+            }
         }
         blockApp.terminate()
     }
@@ -640,8 +669,8 @@ final class CircuitCanvasUITests: XCTestCase {
             let second = coordinates(app.buttons["symbol-抵抗-pin-1"])
             XCTAssertEqual((first[0]+second[0])/2,380,accuracy:1)
             XCTAssertEqual((first[1]+second[1])/2,530,accuracy:1)
-            XCTAssertEqual(abs(first[0]-second[0])+abs(first[1]-second[1]),100,accuracy:1)
-            XCTAssertEqual(coordinates(element(app,"wire-3")),[445,250]+first)
+            XCTAssertEqual(abs(first[0]-second[0])+abs(first[1]-second[1]),60,accuracy:1)
+            XCTAssertEqual(coordinates(element(app,"wire-3")),[415,250]+first)
             assertRoutesClear(app,count:4,extraSymbols:["抵抗"])
         }
         XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
@@ -682,11 +711,11 @@ final class CircuitCanvasUITests: XCTestCase {
         let junctions = (element(app,"canvas-junctions").value as? String ?? "").split(separator:";").map {
             $0.split(separator:",").compactMap { Double($0) }
         }
-        XCTAssertTrue(junctions.contains { $0.count == 2 && $0[0] == 300 && $0[1] > 580 })
+        XCTAssertTrue(junctions.contains { $0.count == 2 && $0[0] == 300 && $0[1] > 560 })
         element(app,"symbol-直流電源").tap()
         app.buttons["symbol-直流電源-rotate"].tap()
         XCTAssertEqual(element(app,"symbol-直流電源-rotation").value as? String,"180")
-        XCTAssertEqual(coordinates(app.buttons["symbol-直流電源-pin-0"]),[350,530])
+        XCTAssertEqual(coordinates(app.buttons["symbol-直流電源-pin-0"]),[330,530])
         assertRoutesClear(app,count:5,extraSymbols:["直流電源","GND"])
         let source = element(app,"symbol-直流電源").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:20,dy:-20)))

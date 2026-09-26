@@ -45,9 +45,9 @@ struct ContentView: View {
     ]
     @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
     @State private var wires: [WireItem] = [
-        .init(start: .init(x: 195, y: 160), end: .init(x: 295, y: 250)),
-        .init(start: .init(x: 445, y: 250), end: .init(x: 545, y: 250)),
-        .init(start: .init(x: 195, y: 390), end: .init(x: 295, y: 250))
+        .init(start: .init(x: 165, y: 160), end: .init(x: 325, y: 250)),
+        .init(start: .init(x: 415, y: 250), end: .init(x: 575, y: 250)),
+        .init(start: .init(x: 165, y: 390), end: .init(x: 325, y: 250))
     ]
 
     private var compact: Bool { horizontalSizeClass == .compact }
@@ -569,10 +569,13 @@ private struct SymbolCard: View {
             }
             Group {
                 if symbol.kind.isBlock {
-                    VStack(spacing: 6) {
-                        Image(systemName: symbol.icon).foregroundStyle(.secondary)
-                        Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                    // Icon and title share one row; the title shrinks to fit the block width.
+                    HStack(spacing: 4) {
+                        Image(systemName: symbol.icon).font(.system(size:12)).foregroundStyle(.secondary)
+                        Text(symbol.title).font(.system(size:12,weight:.medium)).lineLimit(1).minimumScaleFactor(0.4)
                     }
+                    .padding(.horizontal, 10)
+                    .frame(width: bounds.width, height: bounds.height)
                 } else {
                     CircuitGlyph(kind:symbol.kind, rotation:symbol.rotation)
                         .allowsHitTesting(false)
@@ -596,7 +599,7 @@ private struct SymbolCard: View {
         }
         .frame(width: hitSize.width, height: hitSize.height)
         .background {
-            if symbol.kind.isBlock { RoundedRectangle(cornerRadius: 8).fill(.background) }
+            if symbol.kind.isBlock { RoundedRectangle(cornerRadius: 6).fill(.background).frame(width: bounds.width, height: bounds.height) }
         }
         .contentShape(Rectangle())
         .overlay {
@@ -604,7 +607,7 @@ private struct SymbolCard: View {
         }
         .overlay {
             if symbol.kind.isBlock || selected {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: symbol.kind.isBlock ? 6 : 8)
                     .stroke(selected ? Color.accentColor.opacity(symbol.kind.isBlock ? 1 : 0.5) : .primary,
                             lineWidth: symbol.kind.isBlock ? (selected ? 3 : 2) : 1)
                     .frame(width: bounds.width, height: bounds.height)
