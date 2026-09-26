@@ -38,7 +38,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertNotEqual(note.value as? String, before)
         // The note follows the finger 1:1.
         let moved = position(note.value as? String), origin = position(before)
-        XCTAssertEqual(moved.count, 2)
+        guard moved.count == 2, origin.count == 2 else { return XCTFail("cannot read the note position: \(String(describing: note.value)) / \(String(describing: before))") }
         XCTAssertEqual(moved[0] - origin[0], 60, accuracy: 3)
         XCTAssertEqual(moved[1] - origin[1], 90, accuracy: 3)
     }

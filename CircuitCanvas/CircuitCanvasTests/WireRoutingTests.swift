@@ -336,4 +336,21 @@ struct WireRoutingTests {
         #expect(WireRouting.isClear(next[1],bodies:scene.bodies))
         #expect(next[2] == initial[2] && next[3] == initial[3])
     }
+
+    /// Which overlaps count as a problem: only a trunk leaving a pin both wires share is allowed.
+    @Test func overlapIsAllowedOnlyAlongTheTrunkOfASharedPin() {
+        let pin = p(100,100)
+        let a = [pin,p(140,100),p(140,160)]
+        // Shared pin, same first leg (horizontal or vertical): allowed.
+        #expect(!WireRouting.hasForbiddenOverlap(a,with:[[pin,p(140,100),p(140,40)]]))
+        let down = [pin,p(100,160),p(180,160)]
+        #expect(!WireRouting.hasForbiddenOverlap(down,with:[[pin,p(100,200)]]))
+        // Overlap that does not start at a shared pin: forbidden, horizontally and vertically.
+        #expect(WireRouting.hasForbiddenOverlap([p(0,50),p(200,50)],with:[[p(60,50),p(120,50),p(120,0)]]))
+        #expect(WireRouting.hasForbiddenOverlap([p(300,0),p(300,100)],with:[[p(280,40),p(300,40),p(300,140)]]))
+        // Shared pin but the overlap is further along (not the pin's own trunk): forbidden.
+        #expect(WireRouting.hasForbiddenOverlap([pin,p(140,100),p(140,200)],with:[[p(100,300),p(100,120),p(140,120),p(140,180),p(200,180),p(200,100),pin]]))
+        // Crossing without overlap is fine.
+        #expect(!WireRouting.hasForbiddenOverlap([p(0,50),p(200,50)],with:[[p(100,0),p(100,100)]]))
+    }
 }
