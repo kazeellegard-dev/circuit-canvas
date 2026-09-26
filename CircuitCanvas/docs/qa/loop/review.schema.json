@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex review (Codex -> Claude)",
+  "description": "scripts/review-loop.sh が Codex に出力させる、実装とテストのレビュー結果。Claude が読んで、修正・改善に使う。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "findings", "verified", "not_reviewed"],
+  "properties": {
+    "status": {
+      "enum": ["approve", "changes_requested"],
+      "description": "approve=blocker/major の指摘がない / changes_requested=blocker か major が 1 件以上"
+    },
+    "summary": { "type": "string", "description": "全体の所見（日本語、5 行以内）" },
+    "findings": {
+      "type": "array",
+      "description": "重要度の高い順。最大 15 件。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["area", "kind", "severity", "title", "file", "line", "detail", "suggestion"],
+        "properties": {
+          "area": {
+            "enum": ["implementation", "test-content", "test-results"],
+            "description": "implementation=実装 / test-content=テストの内容 / test-results=テストの結果（失敗・遅さ・不安定さ）"
+          },
+          "kind": { "enum": ["defect", "improvement"], "description": "defect=不具合・要件違反 / improvement=改善提案" },
+          "severity": { "enum": ["blocker", "major", "minor", "suggestion"] },
+          "title": { "type": "string" },
+          "file": { "type": "string", "description": "リポジトリルートからの相対パス。特定できないときは空文字" },
+          "line": { "type": "integer", "description": "行番号。特定できないときは 0" },
+          "detail": { "type": "string", "description": "何が問題か、なぜそう言えるか（根拠）" },
+          "suggestion": { "type": "string", "description": "具体的な直し方・改善案" }
+        }
+      }
+    },
+    "verified": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "確認して、問題がなかった点（短く）"
+    },
+    "not_reviewed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "確認できなかった点・読み取り専用のため実行できなかった検証"
+    }
+  }
+}

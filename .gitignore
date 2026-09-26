@@ -4,3 +4,5 @@ xcuserdata/
 # QA loop run logs
 CircuitCanvas/docs/qa/loop/runs/
 CircuitCanvas/docs/qa/loop/verdict.json
+CircuitCanvas/docs/qa/loop/review.json
+CircuitCanvas/docs/qa/loop/last-review-head
