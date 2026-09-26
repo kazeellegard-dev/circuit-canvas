@@ -317,4 +317,23 @@ struct WireRoutingTests {
         let next = WireRouting.reroute(wires,bodies:scene.bodies,margins:[CGFloat?](repeating:nil,count:6))
         #expect(next[0] == WireRouting.reattach(wires[0].manualPoints,start:wires[0].start,end:wires[0].end))
     }
+
+    /// Codex review: a reattached hand-placed route may lie along a kept automatic wire; that wire is planned again.
+    @Test func aKeptWireThatNowOverlapsAManualRouteIsPlannedAgain() {
+        let scene = scene()
+        let margins = [CGFloat?](repeating:nil,count:6)
+        let initial = WireRouting.reroute(scene.wires,bodies:scene.bodies,margins:margins)
+        var wires = scene.wires
+        for i in wires.indices { wires[i].points = initial[i] }
+        // Wire 1 runs straight along y = 400; wire 0's hand-placed route now runs along the same line.
+        #expect(initial[1] == [wires[1].start,wires[1].end])
+        wires[0].manual = true
+        wires[0].manualPoints = [wires[0].start,p(200,160),p(200,400),p(300,400),p(300,160),wires[0].end]
+        let next = WireRouting.reroute(wires,bodies:scene.bodies,margins:margins)
+        #expect(next[1] != initial[1])
+        #expect(next[1].first == wires[1].start && next[1].last == wires[1].end)
+        #expect(!WireRouting.hasForbiddenOverlap(next[1],with:[next[0]]))
+        #expect(WireRouting.isClear(next[1],bodies:scene.bodies))
+        #expect(next[2] == initial[2] && next[3] == initial[3])
+    }
 }

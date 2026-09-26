@@ -30,9 +30,17 @@ final class CircuitCanvasUITests: XCTestCase {
         let note = app.descendants(matching: .any).matching(identifier: "experiment-note-R12を変更").firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 3))
         let before = note.value as? String
-        let destination = app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.68))
-        note.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.2, thenDragTo: destination)
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+        let start = note.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: 60, dy: 90)))
         XCTAssertNotEqual(note.value as? String, before)
+        // The note follows the finger 1:1.
+        let moved = position(note.value as? String), origin = position(before)
+        XCTAssertEqual(moved.count, 2)
+        XCTAssertEqual(moved[0] - origin[0], 60, accuracy: 3)
+        XCTAssertEqual(moved[1] - origin[1], 90, accuracy: 3)
     }
 
     @MainActor
@@ -163,6 +171,9 @@ final class CircuitCanvasUITests: XCTestCase {
             XCTAssertEqual(after, coordinates(startPin) + coordinates(endPin))
             let offset = name == "Temperature" ? 0 : 2
             XCTAssertGreaterThan(after[offset + 1] - before[offset + 1], 30)
+            // The symbol follows the finger 1:1 (it used to lag at about half speed).
+            XCTAssertEqual(after[offset] - before[offset], 48, accuracy: 3, name)
+            XCTAssertEqual(after[offset + 1] - before[offset + 1], 72, accuracy: 3, name)
             // Verify the rendered pin moves by the endpoint delta at 100% zoom.
             XCTAssertEqual(Double(pin.frame.midX - oldFrame.midX), after[offset] - before[offset], accuracy: 2)
             XCTAssertEqual(Double(pin.frame.midY - oldFrame.midY), after[offset + 1] - before[offset + 1], accuracy: 2)

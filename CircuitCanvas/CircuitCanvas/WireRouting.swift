@@ -277,6 +277,27 @@ enum WireRouting {
         }
         return candidate(accepted)
     }
+    /// Overlap along a line is only allowed for the trunk that leaves a pin the two wires share.
+    static func hasForbiddenOverlap(_ path: [CGPoint], with others: [[CGPoint]]) -> Bool {
+        guard let first = path.first, let last = path.last else { return false }
+        for other in others {
+            let ends: [CGPoint] = [first, last]
+            let shared: [CGPoint] = ends.filter { point in point == other.first || point == other.last }
+            for (a, b) in segments(path) {
+                for (c, d) in segments(other) where overlap(a, b, c, d) {
+                    var allowed = false
+                    for pin in shared {
+                        let touchesOther = c == pin || d == pin
+                        let alongRow = a.y == pin.y && b.y == pin.y
+                        let alongColumn = a.x == pin.x && b.x == pin.x
+                        if touchesOther && (alongRow || alongColumn) { allowed = true }
+                    }
+                    if !allowed { return true }
+                }
+            }
+        }
+        return false
+    }
     /// True when no segment runs through the inside of a body.
     static func isClear(_ path: [CGPoint], bodies: [CGRect]) -> Bool {
         !segments(path).contains { a, b in bodies.contains { intersectsInterior(a, b, $0) } }
@@ -293,6 +314,12 @@ enum WireRouting {
             else if wire.points.count < 2 || wire.points.first != wire.start || wire.points.last != wire.end
                         || !isClear(wire.points, bodies: bodies) { pending.append(i) }
         }
+        // A hand-placed route that was reattached may now lie along a kept wire: plan that wire again.
+        let manualPaths = wires.indices.filter { wires[$0].manual }.map { result[$0] }
+        for (i, wire) in wires.enumerated() where !wire.manual && !pending.contains(i) {
+            if hasForbiddenOverlap(result[i], with: manualPaths) { pending.append(i) }
+        }
+        pending.sort()
         var occupied = wires.indices.filter { !pending.contains($0) }.map { result[$0] }
         for i in pending {
             let wire = wires[i]
