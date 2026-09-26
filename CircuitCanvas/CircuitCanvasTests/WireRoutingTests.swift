@@ -87,8 +87,12 @@ struct WireRoutingTests {
         #expect(moved[1].x == moved[2].x)
         let horizontal = [p(0,0),p(20,0),p(20,80),p(100,80),p(100,100),p(120,100)]
         let h = WireRouting.moved(horizontal,segment:2,delta:30,bodies:[])
-        #expect(h[2] == p(20,110) && h[3] == p(100,110))
-        #expect(h.first == horizontal.first && h.last == horizontal.last)
+        // 80 + 30 = 110 is within the snap distance of the line at y = 100 below it: it lands on that line,
+        // and the step it formed disappears.
+        #expect(h == [p(0,0),p(20,0),p(20,100),p(120,100)])
+        let free = WireRouting.moved(horizontal,segment:2,delta:-30,bodies:[])
+        #expect(free[2] == p(20,50) && free[3] == p(100,50))
+        #expect(free.first == horizontal.first && free.last == horizontal.last)
     }
 
     @Test func shortHorizontalTouchChoosesVisibleLineAndMovesOnlyItsY() throws {
@@ -352,5 +356,69 @@ struct WireRoutingTests {
         #expect(WireRouting.hasForbiddenOverlap([pin,p(140,100),p(140,200)],with:[[p(100,300),p(100,120),p(140,120),p(140,180),p(200,180),p(200,100),pin]]))
         // Crossing without overlap is fine.
         #expect(!WireRouting.hasForbiddenOverlap([p(0,50),p(200,50)],with:[[p(100,0),p(100,100)]]))
+    }
+
+    // MARK: straightening steps (snap within 13pt + merging collinear points)
+
+    /// A trunk with a 10pt step: ... -> (100,0) -> (100,80) -> (110,80) -> (110,200) -> ...
+    private var stepped: [CGPoint] { [p(0,0),p(100,0),p(100,80),p(110,80),p(110,200),p(300,200)] }
+
+    @Test func draggingOneSideOfAStepOntoTheOtherMakesOneStraightSegment() {
+        // Segment 3 (the lower vertical, x = 110) dragged towards the upper one (x = 100).
+        for delta in [CGFloat(-10),-8,-12.9,-13,-14.9] {
+            let straight = WireRouting.moved(stepped,segment:3,delta:delta,bodies:[])
+            #expect(straight == [p(0,0),p(100,0),p(100,200),p(300,200)], "delta \(delta)")
+        }
+        // ... and the other way round: the upper vertical (x = 100) towards the lower one.
+        #expect(WireRouting.moved(stepped,segment:1,delta:7,bodies:[]) == [p(0,0),p(110,0),p(110,200),p(300,200)])
+        // Ends never move.
+        let result = WireRouting.moved(stepped,segment:3,delta:-9,bodies:[])
+        #expect(result.first == stepped.first && result.last == stepped.last)
+    }
+
+    @Test func snapReachesExactlyThirteenPointsAndNoFurther() {
+        // Line at x = 110, neighbour at x = 100: proposals 113 (13 away) snap, 114 (14 away) do not.
+        let snapped = WireRouting.moved(stepped,segment:3,delta:3,bodies:[])
+        #expect(snapped == [p(0,0),p(100,0),p(100,200),p(300,200)])
+        let free = WireRouting.moved(stepped,segment:3,delta:4,bodies:[])
+        #expect(free == [p(0,0),p(100,0),p(100,80),p(114,80),p(114,200),p(300,200)])
+        // Far from every neighbour nothing snaps.
+        let far = WireRouting.moved(stepped,segment:3,delta:-40,bodies:[])
+        #expect(far == [p(0,0),p(100,0),p(100,80),p(70,80),p(70,200),p(300,200)])
+    }
+
+    @Test func aStraightenedRouteHasNoZeroLengthOrCollinearSegments() {
+        for delta in stride(from:-20.0,through:20.0,by:1.0) {
+            let path = WireRouting.moved(stepped,segment:3,delta:CGFloat(delta),bodies:[])
+            for (a,b) in WireRouting.segments(path) { #expect(a != b, "delta \(delta)") }
+            for i in 0..<max(0,path.count-2) {
+                let (a,b,c) = (path[i],path[i+1],path[i+2])
+                #expect(!((a.x == b.x && b.x == c.x) || (a.y == b.y && b.y == c.y)), "delta \(delta)")
+            }
+        }
+    }
+
+    @Test func snappingNeverPullsASegmentThroughABody() {
+        // A body between the two vertical lines (x 102...108) is in the way: the lower line stops at its edge
+        // instead of jumping to the neighbour it would otherwise snap to.
+        let body = CGRect(x:102,y:100,width:6,height:50)
+        #expect(WireRouting.isClear(stepped,bodies:[body]))
+        let result = WireRouting.moved(stepped,segment:3,delta:-9,bodies:[body])
+        #expect(WireRouting.isClear(result,bodies:[body]))
+        #expect(result.first == stepped.first && result.last == stepped.last)
+        #expect(result.contains { $0.x == 108 })                    // stopped at the body, not at x = 100
+    }
+
+    @Test func aStraightenedManualRouteStillFollowsItsMovedEnds() {
+        let straight = WireRouting.simplify(WireRouting.moved(stepped,segment:3,delta:-10,bodies:[]))
+        #expect(straight.count == 4)
+        // Down to one segment: both ends aligned.
+        #expect(WireRouting.reattach([p(0,0),p(100,0)],start:p(0,0),end:p(100,0)) == [p(0,0),p(100,0)])
+        // Move an end so the two are no longer in line: rejoined orthogonally, first leg horizontal as before.
+        let elbow = WireRouting.reattach([p(0,0),p(100,0)],start:p(0,0),end:p(100,40))
+        #expect(elbow == [p(0,0),p(100,0),p(100,40)])
+        let vertical = WireRouting.reattach([p(0,0),p(0,100)],start:p(0,0),end:p(30,100))
+        #expect(vertical == [p(0,0),p(0,100),p(30,100)])
+        #expect(WireRouting.segments(elbow).allSatisfy { $0.x == $1.x || $0.y == $1.y })
     }
 }

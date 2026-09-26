@@ -889,6 +889,35 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(moved[1].x,manualRoute[1].x,"the hand-placed trunk stays where it was put")
     }
 
+    /// Wire 2 starts with a 12pt step (x = 289 then 301). One drag of either side within 13pt of the other
+    /// straightens it into a single segment; the route then still follows its moved end.
+    @MainActor
+    func testDraggingOneSideOfAStepStraightensTheWire() {
+        let app = XCUIApplication(); app.launch()
+        let before = routePoints(app,2)
+        XCTAssertEqual(before.count,6)
+        XCTAssertEqual(before[1].x,289); XCTAssertEqual(before[3].x,301)
+        XCTAssertTrue(element(app,"wire-2-segment-3").waitForExistence(timeout:2))
+        let side = element(app,"wire-2-segment-3").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        side.press(forDuration:0.2,thenDragTo:side.withOffset(CGVector(dx:-10,dy:0)))
+        let straight = routePoints(app,2)
+        XCTAssertEqual(straight.count,4,"the step must become one segment: \(straight)")
+        XCTAssertEqual(straight.first,before.first); XCTAssertEqual(straight.last,before.last)
+        XCTAssertEqual(straight[1].x,289); XCTAssertEqual(straight[2].x,289)
+        XCTAssertEqual(straight[1].y,390); XCTAssertEqual(straight[2].y,250)
+        // No separate upper / lower pieces are left to grab.
+        XCTAssertFalse(element(app,"wire-2-segment-3").exists)
+        XCTAssertTrue(element(app,"wire-2-segment-1").exists)
+        // Moving the block at the start of the wire keeps the hand-straightened route attached and orthogonal.
+        let temperature = element(app,"symbol-Temperature").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        temperature.press(forDuration:0.2,thenDragTo:temperature.withOffset(CGVector(dx:0,dy:40)))
+        let moved = routePoints(app,2)
+        XCTAssertEqual(coordinates(element(app,"wire-2")).prefix(2),coordinates(app.buttons["symbol-Temperature-pin-1"]).prefix(2))
+        XCTAssertEqual([moved.first!.x,moved.first!.y],coordinates(app.buttons["symbol-Temperature-pin-1"]))
+        for (a,b) in zip(moved,moved.dropFirst()) { XCTAssertTrue(a.x == b.x || a.y == b.y) }
+        assertRoutesClear(app,count:3)
+    }
+
     @MainActor
     func testVerticalPowerSegmentDragBranchAndRotation() {
         let app = XCUIApplication(); app.launch()

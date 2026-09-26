@@ -49,6 +49,8 @@ enum WireRouting {
     /// `margins[i]` overrides the clear space around `bodies[i]` (circuit symbols are small, so they
     /// use a compact margin); `nil` or a missing entry keeps the block-diagram default.
     static let symbolLead: CGFloat = 15
+    /// A dragged segment within this distance of a parallel neighbour snaps onto it.
+    static let alignSnap: CGFloat = 13
     static func routingBounds(_ bodies: [CGRect], margins: [CGFloat?] = []) -> [CGRect] {
         bodies.enumerated().map { index, body in
             let custom = index < margins.count ? margins[index] : nil
@@ -263,6 +265,16 @@ enum WireRouting {
             }
             return true
         }
+        // Snap onto a neighbouring parallel line (the segments two along, on either side of the perpendicular
+        // links) when it is within `alignSnap`: that is how a step is straightened with one drag.
+        func coordinate(_ k: Int) -> CGFloat { horizontal ? path[k].y : path[k].x }
+        var delta = delta
+        let current = coordinate(segment)
+        let neighbours = [segment - 2, segment + 2].filter { $0 >= 0 && $0 + 1 < path.count }.map(coordinate)
+        if let target = neighbours.min(by: { abs($0 - (current + delta)) < abs($1 - (current + delta)) }),
+           abs(target - (current + delta)) <= alignSnap {
+            delta = target - current
+        }
         // Sweep to the first boundary, so a large gesture cannot tunnel through a body.
         var accepted: CGFloat = 0
         let steps = max(1,Int(ceil(abs(delta))))
@@ -271,11 +283,12 @@ enum WireRouting {
             if !valid(candidate(amount)) {
                 var low = accepted, high = amount
                 for _ in 0..<24 { let mid = (low+high)/2; if valid(candidate(mid)) { low = mid } else { high = mid } }
-                return candidate(low)
+                return simplify(candidate(low))
             }
             accepted = amount
         }
-        return candidate(accepted)
+        // Points that ended up on one line (or on top of each other) are one segment, not several.
+        return simplify(candidate(accepted))
     }
     /// Overlap along a line is only allowed for the trunk that leaves a pin the two wires share.
     static func hasForbiddenOverlap(_ path: [CGPoint], with others: [[CGPoint]]) -> Bool {
@@ -330,7 +343,12 @@ enum WireRouting {
         return result
     }
     static func reattach(_ path: [CGPoint], start: CGPoint, end: CGPoint) -> [CGPoint] {
-        guard path.count >= 4 else { return path }
+        guard path.count >= 4 else {
+            // A route straightened down to one or two segments: rejoin the moved ends orthogonally.
+            if start.x == end.x || start.y == end.y { return [start, end] }
+            let horizontalFirst = path.count >= 2 && path[0].y == path[1].y
+            return [start, horizontalFirst ? CGPoint(x: end.x, y: start.y) : CGPoint(x: start.x, y: end.y), end]
+        }
         var p = path
         if path[0].x == path[1].x { p[1].x = start.x } else { p[1].y = start.y }
         if path[path.count-1].x == path[path.count-2].x { p[p.count-2].x = end.x }
