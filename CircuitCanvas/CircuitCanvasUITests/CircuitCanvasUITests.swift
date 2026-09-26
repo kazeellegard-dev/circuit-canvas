@@ -799,6 +799,14 @@ final class CircuitCanvasUITests: XCTestCase {
         if !element(app,"symbol-Main MCU-resize-tl").waitForExistence(timeout:1) { element(app,"symbol-Main MCU").tap() }   // a tap right after another can be dropped
         for corner in ["tl","tr","bl","br"] { XCTAssertTrue(element(app,"symbol-Main MCU-resize-\(corner)").waitForExistence(timeout:2), corner) }
 
+        // Handles are finger-sized and their squares stay clear of the pins' squares.
+        for corner in ["tl","tr","bl","br"] {
+            let frame = element(app,"symbol-Main MCU-resize-\(corner)").frame
+            XCTAssertGreaterThanOrEqual(frame.width,31.5,corner); XCTAssertGreaterThanOrEqual(frame.height,31.5,corner)
+            for pin in 0...1 {
+                XCTAssertFalse(frame.intersects(app.buttons["symbol-Main MCU-pin-\(pin)"].frame),"\(corner) handle overlaps pin \(pin)")
+            }
+        }
         // br: the top-left corner (325,235) stays; 150 x 90; both pins in the first row slot (y = 235 + 15).
         drag("br",60,60)
         XCTAssertEqual(size("Main MCU"),[150,90])
@@ -844,6 +852,21 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertFalse(element(app,"symbol-抵抗-resize-br").exists)
         XCTAssertFalse(element(app,"symbol-抵抗-size").exists)
         XCTAssertFalse(element(app,"symbol-Main MCU-resize-br").exists)
+
+        // A hand-placed wire segment survives a drag that changes nothing and a resize that keeps its pin.
+        // (Placed while the block is not selected: its corner handles would sit right over the trunk.)
+        let trunk = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        trunk.press(forDuration:0.2,thenDragTo:trunk.withOffset(CGVector(dx:-20,dy:0)))
+        let manualRoute = routePoints(app,0)
+        XCTAssertEqual(manualRoute.count,4)
+        element(app,"symbol-Main MCU").tap()
+        if !element(app,"symbol-Main MCU-resize-br").waitForExistence(timeout:1) { element(app,"symbol-Main MCU").tap() }
+        drag("br",10,10)
+        XCTAssertEqual(size("Main MCU"),[90,30])
+        XCTAssertEqual(routePoints(app,0),manualRoute,"a drag that changes nothing must leave the route alone")
+        drag("br",60,60)
+        XCTAssertEqual(size("Main MCU"),[150,90])
+        XCTAssertEqual(routePoints(app,0),manualRoute,"the left pin did not move, so the hand-placed route stays")
     }
 
     @MainActor

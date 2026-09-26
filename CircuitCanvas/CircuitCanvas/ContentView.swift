@@ -257,12 +257,18 @@ struct ContentView: View {
                 }
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), symbol.kind.isBlock {
                     let bounds = symbol.kind.body(at:symbol.position,rotation:0,size:symbol.size)
+                    // Screen-constant size: at zoom < 100 % the logical hit square grows so it stays >= 32pt on screen.
+                    let k = max(1, 1 / canvasScale)
                     ForEach(ResizeCorner.allCases) { corner in
-                        // Sits just outside the corner so it never covers the pins on the edges.
-                        Circle().fill(Color.accentColor).frame(width:10,height:10)
-                            .frame(width:24,height:24).contentShape(Rectangle())
-                            .position(x:(corner.sx < 0 ? bounds.minX : bounds.maxX) + corner.sx*7,
-                                      y:(corner.sy < 0 ? bounds.minY : bounds.maxY) + corner.sy*7)
+                        // The 32pt square sits diagonally outside the corner, clear of the pin squares (28pt,
+                        // centred on the first row slot 15pt below the top): it ends at the top/bottom edge.
+                        let corner_x = corner.sx < 0 ? bounds.minX : bounds.maxX
+                        let corner_y = corner.sy < 0 ? bounds.minY : bounds.maxY
+                        Color.clear.frame(width:32*k,height:32*k)
+                            .overlay { Circle().fill(Color.accentColor).frame(width:10*k,height:10*k)
+                                .offset(x:-corner.sx*6*k,y:-corner.sy*10*k) }   // drawn 6pt outside the corner
+                            .contentShape(Rectangle())
+                            .position(x:corner_x + corner.sx*12*k, y:corner_y + corner.sy*16*k)
                             .accessibilityElement().accessibilityLabel("大きさを変更")
                             .accessibilityIdentifier("symbol-\(symbol.title)-resize-\(corner.rawValue)")
                             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))
@@ -413,14 +419,16 @@ struct ContentView: View {
         let result = BlockSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
         applyBlockGeometry(i, center: result.center, size: result.size)
     }
-    /// Moves the block's pins and carries the attached wire ends along; manual routes there restart automatically.
+    /// Moves the block's pins and carries the attached wire ends along. Like moving a symbol, manually placed
+    /// segments are kept (reattached to the moved ends); nothing happens when the geometry did not change.
     private func applyBlockGeometry(_ i: Int, center: CGPoint, size: CGSize) {
+        guard center != symbols[i].position || size != symbols[i].size else { return }
         let old = pins(for: symbols[i])
         symbols[i].position = center; symbols[i].size = size
         let new = pins(for: symbols[i])
         for j in wires.indices {
-            if let point = SymbolKind.remapped(wires[j].start, from: old, to: new) { wires[j].start = point; wires[j].manual = false }
-            if let point = SymbolKind.remapped(wires[j].end, from: old, to: new) { wires[j].end = point; wires[j].manual = false }
+            if let point = SymbolKind.remapped(wires[j].start, from: old, to: new) { wires[j].start = point }
+            if let point = SymbolKind.remapped(wires[j].end, from: old, to: new) { wires[j].end = point }
         }
         if let pin = pendingWireStart, let point = SymbolKind.remapped(pin, from: old, to: new) { pendingWireStart = point }
         reroute()
