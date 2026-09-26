@@ -697,18 +697,24 @@ final class CircuitCanvasUITests: XCTestCase {
         place(app,category:"半導体",name:"NPNトランジスタ",x:transistor.x,y:transistor.y)
         func pin(_ name: String, _ index: Int) -> XCUIElement { app.buttons["symbol-\(name)-pin-\(index)"] }
 
-        // Adjacent pins 30pt apart: only the tapped one is selected; any other pin of the same symbol is rejected.
+        // Adjacent pins 30pt apart: only the tapped one is selected.
         app.buttons["配線"].tap()
         pin("コネクタ",1).tap()
         XCTAssertTrue(pin("コネクタ",1).isSelected)
         XCTAssertFalse(pin("コネクタ",0).isSelected || pin("コネクタ",2).isSelected || pin("コネクタ",3).isSelected)
-        for other in [0,2,3] {
-            pin("コネクタ",other).tap()
-            XCTAssertTrue(pin("コネクタ",1).isSelected, "start must stay selected after P\(other+1)")
-            XCTAssertFalse(pin("コネクタ",other).isSelected)
-            XCTAssertFalse(element(app,"wire-3").exists)
+        // Any two pins of one symbol are rejected (all 12 ordered pairs): the start stays selected, no wire appears.
+        for start in 0..<4 {
+            app.buttons["配線"].tap()
+            pin("コネクタ",start).tap()
+            XCTAssertTrue(pin("コネクタ",start).isSelected, "P\(start+1) selected")
+            for other in 0..<4 where other != start {
+                pin("コネクタ",other).tap()
+                XCTAssertTrue(pin("コネクタ",start).isSelected, "start P\(start+1) must stay selected after P\(other+1)")
+                XCTAssertFalse(pin("コネクタ",other).isSelected)
+                XCTAssertFalse(element(app,"wire-3").exists)
+            }
         }
-        // A separate wire from each of P1...P3 to the transistor's B, C, E.
+        // A separate wire from each of P1...P3 to the transistor's B, C, E (P4 stays free).
         for index in 0..<3 {
             app.buttons["配線"].tap()
             pin("コネクタ",index).tap()

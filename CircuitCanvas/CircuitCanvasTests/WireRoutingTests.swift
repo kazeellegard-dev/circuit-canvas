@@ -179,6 +179,13 @@ struct WireRoutingTests {
                     for (a,b) in WireRouting.segments(path) {
                         #expect(a.x == b.x || a.y == b.y)
                         #expect(!obstacles.contains { WireRouting.intersectsInterior(a,b,$0) }, "\(kind) at \(rotation)")
+                        // Wires may only overlap along a trunk that starts at a pin they share.
+                        for other in paths {
+                            for (c,d) in WireRouting.segments(other) where WireRouting.overlap(a,b,c,d) {
+                                let pin = connection.start
+                                #expect(pin == other.first && (a == pin || b == pin) && (c == pin || d == pin), "\(kind) at \(rotation)")
+                            }
+                        }
                     }
                     for (pin,next,direction) in [(path[0],path[1],connection.startDirection!),(path.last!,path[path.count-2],connection.endDirection!)] {
                         let along = (next.x-pin.x)*direction.vector.x + (next.y-pin.y)*direction.vector.y
