@@ -272,7 +272,7 @@ struct CircuitSymbolTests {
                     #expect(!body.insetBy(dx:1,dy:1).intersects(rect))        // outside the block itself
                     squares.append(rect)
                 }
-                for i in squares.indices { for j in squares.indices where j > i { #expect(!squares[i].intersects(squares[j]) || scale < 1) } }
+                for i in squares.indices { for j in squares.indices where j > i { #expect(!squares[i].intersects(squares[j]), "handles overlap at scale \(scale)") } }
             }
         }
     }
