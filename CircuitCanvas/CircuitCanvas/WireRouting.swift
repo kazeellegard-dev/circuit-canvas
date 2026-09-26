@@ -251,6 +251,14 @@ enum WireRouting {
             else { p[segment].x += amount; p[segment+1].x += amount }
             return p
         }
+        let checked: [(Int, CGFloat)] = [segment - 1, segment, segment + 1].filter { $0 >= 1 && $0 + 1 < path.count - 1 }.map { k in
+            var clearance: CGFloat = 0
+            for d in stride(from: 12, through: 0, by: -1) {
+                let inset = CGFloat(d)
+                if !bodies.contains(where: { intersectsInterior(path[k], path[k+1], $0.insetBy(dx: -inset, dy: -inset)) }) { clearance = inset; break }
+            }
+            return (k, clearance)
+        }
         func valid(_ p: [CGPoint]) -> Bool {
             guard !segments(p).contains(where: { a,b in bodies.contains { intersectsInterior(a,b,$0) } }) else { return false }
             if minimumTerminalLead > 0 {
@@ -259,8 +267,12 @@ enum WireRouting {
                     let length = abs(dx)+abs(dy)
                     guard length > 0, ((next.x-pin.x)*dx+(next.y-pin.y)*dy)/length >= minimumTerminalLead else { return false }
                 }
-                for (a,b) in segments(p).dropFirst().dropLast() {
-                    if bodies.contains(where: { intersectsInterior(a,b,$0.insetBy(dx:-12,dy:-12)) }) { return false }
+                // Keep the dragged segment and the two beside it clear of bodies - by up to 12pt, but never by more
+                // than they already were: a route through a narrow gap was planned with a smaller margin, and
+                // must not become impossible to drag.
+                for (k, clearance) in checked {
+                    let a = p[k], b = p[k+1]
+                    if bodies.contains(where: { intersectsInterior(a,b,$0.insetBy(dx:-clearance,dy:-clearance)) }) { return false }
                 }
             }
             return true

@@ -421,4 +421,24 @@ struct WireRoutingTests {
         #expect(vertical == [p(0,0),p(0,100),p(30,100)])
         #expect(WireRouting.segments(elbow).allSatisfy { $0.x == $1.x || $0.y == $1.y })
     }
+
+    /// Codex review: a route planned through a narrow gap (10pt clear on each side) must stay draggable, while a
+    /// segment that is dragged towards a body still stops before it.
+    @Test func routesThroughNarrowGapsStayDraggableAndStillAvoidBodies() {
+        let upper = CGRect(x:100,y:-100,width:50,height:100), lower = CGRect(x:100,y:20,width:50,height:100)
+        let path = [p(0,-150),p(60,-150),p(60,10),p(200,10),p(200,200),p(300,200)]      // segment 2 runs through the gap at y = 10
+        let bodies = [upper,lower]
+        #expect(WireRouting.isClear(path,bodies:bodies))
+        // A segment beside the gap is dragged: the route through the gap is not what changed, so the drag works.
+        let moved = WireRouting.moved(path,segment:3,delta:50,bodies:bodies,minimumTerminalLead:8)
+        #expect(moved[3].x == 250 && moved[4].x == 250)
+        #expect(WireRouting.isClear(moved,bodies:bodies))
+        // The other way: the vertical at x = 60 is pushed towards the upper body and stops short of it.
+        let towards = WireRouting.moved(path,segment:1,delta:200,bodies:bodies,minimumTerminalLead:8)
+        #expect(WireRouting.isClear(towards,bodies:bodies))
+        #expect(towards[1].x <= 100 && towards[1].x > 60)
+        // Without the lead limit nothing changes: a segment may go right up to a body.
+        let plain = WireRouting.moved(path,segment:1,delta:200,bodies:bodies)
+        #expect(WireRouting.isClear(plain,bodies:bodies) && plain[1].x == 100)
+    }
 }

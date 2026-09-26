@@ -899,13 +899,13 @@ final class CircuitCanvasUITests: XCTestCase {
     func testDraggingOneSideOfAStepStraightensTheWire() {
         let app = XCUIApplication(); app.launch()
         let before = routePoints(app,2)
-        XCTAssertEqual(before.count,6)
+        guard before.count == 6 else { return XCTFail("wire 2 should start with a step: \(before)") }
         XCTAssertEqual(before[1].x,289); XCTAssertEqual(before[3].x,301)
         XCTAssertTrue(element(app,"wire-2-segment-3").waitForExistence(timeout:2))
         let side = element(app,"wire-2-segment-3").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         side.press(forDuration:0.2,thenDragTo:side.withOffset(CGVector(dx:-10,dy:0)))
         let straight = routePoints(app,2)
-        XCTAssertEqual(straight.count,4,"the step must become one segment: \(straight)")
+        guard straight.count == 4 else { return XCTFail("the step must become one segment: \(straight)") }
         XCTAssertEqual(straight.first,before.first); XCTAssertEqual(straight.last,before.last)
         XCTAssertEqual(straight[1].x,289); XCTAssertEqual(straight[2].x,289)
         XCTAssertEqual(straight[1].y,390); XCTAssertEqual(straight[2].y,250)
@@ -917,7 +917,8 @@ final class CircuitCanvasUITests: XCTestCase {
         temperature.press(forDuration:0.2,thenDragTo:temperature.withOffset(CGVector(dx:0,dy:40)))
         let moved = routePoints(app,2)
         XCTAssertEqual(coordinates(element(app,"wire-2")).prefix(2),coordinates(app.buttons["symbol-Temperature-pin-1"]).prefix(2))
-        XCTAssertEqual([moved.first!.x,moved.first!.y],coordinates(app.buttons["symbol-Temperature-pin-1"]))
+        guard let first = moved.first else { return XCTFail("wire 2 has no route") }
+        XCTAssertEqual([first.x,first.y],coordinates(app.buttons["symbol-Temperature-pin-1"]))
         for (a,b) in zip(moved,moved.dropFirst()) { XCTAssertTrue(a.x == b.x || a.y == b.y) }
         assertRoutesClear(app,count:3)
     }
