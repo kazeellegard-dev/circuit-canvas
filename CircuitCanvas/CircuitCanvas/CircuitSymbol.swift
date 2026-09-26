@@ -20,6 +20,13 @@ enum BlockSize {
         return CGSize(width: snap(proposed.width, minimum.width, maximum.width),
                       height: snap(proposed.height, minimum.height, maximum.height))
     }
+    /// Hit square of a corner handle, diagonally outside the corner so it ends at the top/bottom edge - clear of the
+    /// 28pt pin squares - and stays 32pt on screen: below 100 % zoom the logical square grows by 1/scale.
+    static func handleRect(body: CGRect, sx: CGFloat, sy: CGFloat, scale: CGFloat) -> CGRect {
+        let k = max(1, 1 / scale)
+        let center = CGPoint(x: (sx < 0 ? body.minX : body.maxX) + sx * 12 * k, y: (sy < 0 ? body.minY : body.maxY) + sy * 16 * k)
+        return CGRect(x: center.x - 16 * k, y: center.y - 16 * k, width: 32 * k, height: 32 * k)
+    }
     /// Drag a corner (`sx`, `sy` = -1 left/top, +1 right/bottom) by `translation`; the opposite corner stays put.
     static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
         let next = snapped(CGSize(width: size.width + sx * translation.width, height: size.height + sy * translation.height))

@@ -855,10 +855,13 @@ final class CircuitCanvasUITests: XCTestCase {
 
         // A hand-placed wire segment survives a drag that changes nothing and a resize that keeps its pin.
         // (Placed while the block is not selected: its corner handles would sit right over the trunk.)
+        let automaticRoute = routePoints(app,0)
         let trunk = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         trunk.press(forDuration:0.2,thenDragTo:trunk.withOffset(CGVector(dx:-20,dy:0)))
         let manualRoute = routePoints(app,0)
         XCTAssertEqual(manualRoute.count,4)
+        XCTAssertNotEqual(manualRoute,automaticRoute,"the trunk must really have been moved by hand")
+        XCTAssertEqual(manualRoute[1].x,automaticRoute[1].x-20,accuracy:1)
         element(app,"symbol-Main MCU").tap()
         if !element(app,"symbol-Main MCU-resize-br").waitForExistence(timeout:1) { element(app,"symbol-Main MCU").tap() }
         drag("br",10,10)
@@ -867,6 +870,12 @@ final class CircuitCanvasUITests: XCTestCase {
         drag("br",60,60)
         XCTAssertEqual(size("Main MCU"),[150,90])
         XCTAssertEqual(routePoints(app,0),manualRoute,"the left pin did not move, so the hand-placed route stays")
+        // A resize that moves the wire's own pin: the end follows it and the hand-placed trunk is kept.
+        drag("tl",-30,0)
+        XCTAssertEqual(size("Main MCU"),[180,90])
+        let moved = routePoints(app,0)
+        XCTAssertEqual(moved.last,CGPoint(x:coordinates(app.buttons["symbol-Main MCU-pin-0"])[0],y:coordinates(app.buttons["symbol-Main MCU-pin-0"])[1]))
+        XCTAssertEqual(moved[1].x,manualRoute[1].x,"the hand-placed trunk stays where it was put")
     }
 
     @MainActor

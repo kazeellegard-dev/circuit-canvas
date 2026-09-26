@@ -257,18 +257,14 @@ struct ContentView: View {
                 }
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), symbol.kind.isBlock {
                     let bounds = symbol.kind.body(at:symbol.position,rotation:0,size:symbol.size)
-                    // Screen-constant size: at zoom < 100 % the logical hit square grows so it stays >= 32pt on screen.
                     let k = max(1, 1 / canvasScale)
                     ForEach(ResizeCorner.allCases) { corner in
-                        // The 32pt square sits diagonally outside the corner, clear of the pin squares (28pt,
-                        // centred on the first row slot 15pt below the top): it ends at the top/bottom edge.
-                        let corner_x = corner.sx < 0 ? bounds.minX : bounds.maxX
-                        let corner_y = corner.sy < 0 ? bounds.minY : bounds.maxY
-                        Color.clear.frame(width:32*k,height:32*k)
+                        let hit = BlockSize.handleRect(body: bounds, sx: corner.sx, sy: corner.sy, scale: canvasScale)
+                        Color.clear.frame(width:hit.width,height:hit.height)
                             .overlay { Circle().fill(Color.accentColor).frame(width:10*k,height:10*k)
                                 .offset(x:-corner.sx*6*k,y:-corner.sy*10*k) }   // drawn 6pt outside the corner
                             .contentShape(Rectangle())
-                            .position(x:corner_x + corner.sx*12*k, y:corner_y + corner.sy*16*k)
+                            .position(x:hit.midX, y:hit.midY)
                             .accessibilityElement().accessibilityLabel("大きさを変更")
                             .accessibilityIdentifier("symbol-\(symbol.title)-resize-\(corner.rawValue)")
                             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))

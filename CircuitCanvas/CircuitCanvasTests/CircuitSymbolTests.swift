@@ -255,4 +255,25 @@ struct CircuitSymbolTests {
         // Circuit symbols ignore any size.
         #expect(SymbolKind.resistor.pins(at:center,size:CGSize(width:300,height:180)) == SymbolKind.resistor.pins(at:center))
     }
+
+    /// Corner handles stay >= 32pt on screen and clear of the pins' 28pt squares at every zoom (Codex review).
+    @Test func resizeHandlesAreFingerSizedAndClearOfPinsAtEveryZoom() {
+        let center = CGPoint(x:400,y:300)
+        for size in [CGSize(width:90,height:30),CGSize(width:150,height:90),CGSize(width:300,height:180)] {
+            let body = SymbolKind.mcu.body(at:center,rotation:0,size:size)
+            let pins = SymbolKind.mcu.pins(at:center,size:size)
+            let pinSquares = pins.map { CGRect(x:$0.x-14,y:$0.y-14,width:28,height:28) }
+            for scale in [CGFloat(0.5),0.75,1,1.5,2.5] {
+                var squares: [CGRect] = []
+                for (sx,sy) in [(-1.0,-1.0),(1,-1),(-1,1),(1,1)] {
+                    let rect = BlockSize.handleRect(body:body,sx:CGFloat(sx),sy:CGFloat(sy),scale:scale)
+                    #expect(rect.width * scale >= 32 - 0.001 && rect.height * scale >= 32 - 0.001, "scale \(scale)")
+                    #expect(pinSquares.allSatisfy { !$0.intersects(rect) }, "\(size) scale \(scale) corner \(sx),\(sy)")
+                    #expect(!body.insetBy(dx:1,dy:1).intersects(rect))        // outside the block itself
+                    squares.append(rect)
+                }
+                for i in squares.indices { for j in squares.indices where j > i { #expect(!squares[i].intersects(squares[j]) || scale < 1) } }
+            }
+        }
+    }
 }
