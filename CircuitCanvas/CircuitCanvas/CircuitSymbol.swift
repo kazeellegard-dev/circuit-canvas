@@ -6,6 +6,27 @@ enum SymbolCategory: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// Resizing of block-diagram symbols: the height is a multiple of 30pt (one left/right pin slot per 30pt,
+/// so a pin can always be added without overflowing) and the width moves in 30pt steps.
+enum BlockSize {
+    static let step: CGFloat = 30
+    static let minimum = CGSize(width:90,height:30)
+    static let maximum = CGSize(width:300,height:180)
+    static let standard = CGSize(width:90,height:30)
+    static func snapped(_ proposed: CGSize) -> CGSize {
+        func snap(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+            min(max(low + step * ((value - low) / step).rounded(), low), high)
+        }
+        return CGSize(width: snap(proposed.width, minimum.width, maximum.width),
+                      height: snap(proposed.height, minimum.height, maximum.height))
+    }
+    /// Drag a corner (`sx`, `sy` = -1 left/top, +1 right/bottom) by `translation`; the opposite corner stays put.
+    static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
+        let next = snapped(CGSize(width: size.width + sx * translation.width, height: size.height + sy * translation.height))
+        return (CGPoint(x: center.x + sx * (next.width - size.width) / 2, y: center.y + sy * (next.height - size.height) / 2), next)
+    }
+}
+
 enum SymbolKind: String, CaseIterable, Identifiable {
     case dc = "直流電源", battery = "電池", ac = "交流電源", vcc = "VCC", ground = "GND"
     case resistor = "抵抗", variableResistor = "可変抵抗", capacitor = "コンデンサ"
@@ -110,17 +131,24 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         guard let index = old.firstIndex(where: { hypot($0.x-point.x,$0.y-point.y) < 1 }) else { return nil }
         return new[index]
     }
-    func pins(at position: CGPoint, rotation: Int? = nil) -> [CGPoint] {
-        let angle = isBlock ? 0 : (rotation ?? defaultRotation)
-        return pinSpecs.map { spec in
-            let offset = rotated(spec.offset, by: angle)
-            return CGPoint(x: position.x + offset.x, y: position.y + offset.y)
+    /// Pin positions relative to the centre. Blocks put the two pins in the first row slot of the left and right
+    /// edges (y = top + 15, one slot per 30pt of height); that is the centre line for the default 90 × 30.
+    private func offsets(rotation angle: Int, blockSize: CGSize?) -> [CGPoint] {
+        if isBlock {
+            let size = blockSize ?? frameSize
+            return [CGPoint(x:-size.width/2,y:-size.height/2+15), CGPoint(x:size.width/2,y:-size.height/2+15)]
         }
+        return pinSpecs.map { rotated($0.offset,by:angle) }
     }
-    func body(at position: CGPoint, rotation: Int) -> CGRect {
+    func pins(at position: CGPoint, rotation: Int? = nil, size: CGSize? = nil) -> [CGPoint] {
+        let angle = isBlock ? 0 : (rotation ?? defaultRotation)
+        return offsets(rotation:angle,blockSize:size).map { CGPoint(x: position.x + $0.x, y: position.y + $0.y) }
+    }
+    func body(at position: CGPoint, rotation: Int, size: CGSize? = nil) -> CGRect {
         let vertical = !isBlock && rotation % 180 != 0
-        let size = vertical ? CGSize(width: frameSize.height, height: frameSize.width) : frameSize
-        return CGRect(x:position.x-size.width/2,y:position.y-size.height/2,width:size.width,height:size.height)
+        let frame = isBlock ? (size ?? frameSize) : frameSize
+        let box = vertical ? CGSize(width: frame.height, height: frame.width) : frame
+        return CGRect(x:position.x-box.width/2,y:position.y-box.height/2,width:box.width,height:box.height)
     }
     func direction(for pin: Int, rotation: Int) -> WireRouting.Direction {
         WireRouting.Direction(rawValue: (pinSpecs[pin].direction.rawValue + (isBlock ? 0 : rotation/90)) % 4)!

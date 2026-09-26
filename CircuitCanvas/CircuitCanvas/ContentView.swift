@@ -7,9 +7,15 @@
 
 import SwiftUI
 
+private enum ResizeCorner: String, CaseIterable, Identifiable {
+    case tl, tr, bl, br
+    var id: String { rawValue }
+    var sx: CGFloat { self == .tl || self == .bl ? -1 : 1 }
+    var sy: CGFloat { self == .tl || self == .tr ? -1 : 1 }
+}
 private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
-private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var icon: String { kind.icon }; init(title: String, kind: SymbolKind, position: CGPoint) { self.title = title; self.kind = kind; self.position = position; self.rotation = kind.defaultRotation } }
+private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize; var icon: String { kind.icon }; init(title: String, kind: SymbolKind, position: CGPoint) { self.title = title; self.kind = kind; self.position = position; self.rotation = kind.defaultRotation; self.size = kind.frameSize } }
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint? }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
@@ -29,6 +35,8 @@ struct ContentView: View {
         let segment: Int
         let origin: [CGPoint]
     }
+    private struct ResizeDrag { let id: UUID; let center: CGPoint; let size: CGSize }
+    @State private var resizeDrag: ResizeDrag?
     @State private var segmentDrag: SegmentDrag?
     @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
@@ -235,7 +243,7 @@ struct ContentView: View {
                         )
                 }
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), !symbol.kind.isBlock {
-                    let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation)
+                    let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
                     Button { rotateSymbol(id) } label: {
                         Image(systemName:"arrow.clockwise")
                             .frame(width:32,height:32)
@@ -246,6 +254,21 @@ struct ContentView: View {
                     .position(x:bounds.maxX+24,y:bounds.minY-24)
                     .accessibilityLabel("回転")
                     .accessibilityIdentifier("symbol-\(symbol.title)-rotate")
+                }
+                if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), symbol.kind.isBlock {
+                    let bounds = symbol.kind.body(at:symbol.position,rotation:0,size:symbol.size)
+                    ForEach(ResizeCorner.allCases) { corner in
+                        // Sits just outside the corner so it never covers the pins on the edges.
+                        Circle().fill(Color.accentColor).frame(width:10,height:10)
+                            .frame(width:24,height:24).contentShape(Rectangle())
+                            .position(x:(corner.sx < 0 ? bounds.minX : bounds.maxX) + corner.sx*7,
+                                      y:(corner.sy < 0 ? bounds.minY : bounds.maxY) + corner.sy*7)
+                            .accessibilityElement().accessibilityLabel("大きさを変更")
+                            .accessibilityIdentifier("symbol-\(symbol.title)-resize-\(corner.rawValue)")
+                            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))
+                                .onChanged { value in resize(symbolID: id, corner: corner, translation: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
+                                .onEnded { _ in resizeDrag = nil })
+                    }
                 }
                 ForEach($notes) { $note in
                     NoteCard(
@@ -294,6 +317,17 @@ struct ContentView: View {
                     if !symbol.wrappedValue.kind.isBlock {
                         Button("回転", systemImage:"arrow.clockwise") { rotateSymbol(id) }
                             .accessibilityIdentifier("inspector-rotate")
+                    } else {
+                        LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
+                        Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
+                            if let i = symbols.firstIndex(where: { $0.id == id }) {
+                                // Same top-left corner, standard size.
+                                let body = symbols[i].kind.body(at:symbols[i].position,rotation:0,size:symbols[i].size)
+                                let standard = BlockSize.standard
+                                applyBlockGeometry(i, center: CGPoint(x:body.minX+standard.width/2,y:body.minY+standard.height/2), size: standard)
+                            }
+                        }
+                        .accessibilityIdentifier("inspector-reset-size")
                     }
                     Button("シンボルを削除", role: .destructive) {
                         removeSymbol(id)
@@ -365,6 +399,25 @@ struct ContentView: View {
         let old = pins(for:symbols[i])
         symbols[i].rotation = (symbols[i].rotation + 90) % 360
         let new = pins(for:symbols[i])
+        for j in wires.indices {
+            if let point = SymbolKind.remapped(wires[j].start, from: old, to: new) { wires[j].start = point; wires[j].manual = false }
+            if let point = SymbolKind.remapped(wires[j].end, from: old, to: new) { wires[j].end = point; wires[j].manual = false }
+        }
+        if let pin = pendingWireStart, let point = SymbolKind.remapped(pin, from: old, to: new) { pendingWireStart = point }
+        reroute()
+    }
+    private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
+        guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
+        let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
+        resizeDrag = origin
+        let result = BlockSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
+        applyBlockGeometry(i, center: result.center, size: result.size)
+    }
+    /// Moves the block's pins and carries the attached wire ends along; manual routes there restart automatically.
+    private func applyBlockGeometry(_ i: Int, center: CGPoint, size: CGSize) {
+        let old = pins(for: symbols[i])
+        symbols[i].position = center; symbols[i].size = size
+        let new = pins(for: symbols[i])
         for j in wires.indices {
             if let point = SymbolKind.remapped(wires[j].start, from: old, to: new) { wires[j].start = point; wires[j].manual = false }
             if let point = SymbolKind.remapped(wires[j].end, from: old, to: new) { wires[j].end = point; wires[j].manual = false }
@@ -448,7 +501,7 @@ struct ContentView: View {
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
-    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation) }
+    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation, size:symbol.size) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
     private func isConnected(_ symbol: SymbolItem) -> Bool { pins(for: symbol).contains { pin in wires.contains { $0.start.distance(to: pin) < 1 || $0.end.distance(to: pin) < 1 } } }
 
@@ -456,7 +509,7 @@ struct ContentView: View {
         Label(text, systemImage: icon).font(.footnote.weight(.medium)).padding(10)
             .background(.thinMaterial, in: Capsule()).accessibilityIdentifier("operation-hint")
     }
-    private var bodies: [CGRect] { symbols.map { $0.kind.body(at:$0.position, rotation:$0.rotation) } }
+    private var bodies: [CGRect] { symbols.map { $0.kind.body(at:$0.position, rotation:$0.rotation, size:$0.size) } }
     /// Circuit symbols are small, so they get a compact clear margin; blocks keep the default.
     private var routingMargins: [CGFloat?] { symbols.map { $0.kind.isBlock ? nil : WireRouting.symbolLead } }
     private func direction(at pin: CGPoint) -> WireRouting.Direction? {
@@ -549,8 +602,8 @@ private struct SymbolCard: View {
     let wireStartPinIndex: Int?
     let select: () -> Void
     let selectPin: (Int) -> Void
-    private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation) }
-    private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation) }
+    private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation, size:symbol.size) }
+    private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation, size:symbol.size) }
     /// Small symbols still get a finger-sized (44 pt) select / drag target.
     private var hitSize: CGSize { CGSize(width:max(bounds.width,44), height:max(bounds.height,44)) }
     var body: some View {
@@ -584,6 +637,13 @@ private struct SymbolCard: View {
 
             ForEach(0..<symbol.kind.pinCount, id: \.self) { index in
                 pin(index).offset(x:offsets[index].x,y:offsets[index].y)
+            }
+            if symbol.kind.isBlock {
+                Text("size").font(.system(size:1)).opacity(0.01)
+                    .offset(x: bounds.width/2 - 6, y: bounds.height/2 - 3)   // off the centre so taps at the block's middle are unaffected
+                    .accessibilityIdentifier("symbol-\(symbol.title)-size")
+                    .accessibilityValue("\(Int(symbol.size.width)),\(Int(symbol.size.height))")
+                    .allowsHitTesting(false)
             }
             if !symbol.kind.isBlock {
                 Text("\(symbol.rotation)").font(.system(size:1)).opacity(0.01)

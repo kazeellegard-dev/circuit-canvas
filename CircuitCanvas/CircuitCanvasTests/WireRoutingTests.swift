@@ -240,4 +240,18 @@ struct WireRoutingTests {
         #expect(path == [p(0,0),p(192,0),p(192,100),p(200,100)])
         #expect(WireRouting.segments(path).contains { WireRouting.intersectsInterior($0,$1,blocker) })
     }
+
+    /// A pin in the first row slot of a tall block leaves outward through the block's side, not along its edge.
+    @Test func wireLeavesTheFirstRowSlotOfATallBlockSideways() {
+        let tall = CGRect(x:325,y:235,width:150,height:90)          // pins at (325,250) and (475,250)
+        let other = CGRect(x:0,y:235,width:90,height:30)             // pin at (90,250)
+        let bodies = [tall,other]
+        let path = WireRouting.route(.init(start:p(90,250),end:p(325,250)),bodies:bodies,occupied:[])
+        #expect(path.first == p(90,250) && path.last == p(325,250))
+        #expect(WireRouting.segments(path).allSatisfy { a,b in !bodies.contains { WireRouting.intersectsInterior(a,b,$0) } })
+        #expect(path.count >= 2 && path[path.count-2].x < 325)        // arrives from the left, outside the block
+        // The right pin's lead heads right, away from the block.
+        let up = WireRouting.route(.init(start:p(475,250),end:p(600,100)),bodies:bodies,occupied:[])
+        #expect(up.count >= 2 && up[1].x > 475 && up[1].y == 250)
+    }
 }

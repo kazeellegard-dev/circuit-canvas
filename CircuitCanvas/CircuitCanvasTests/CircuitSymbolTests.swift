@@ -204,4 +204,55 @@ struct CircuitSymbolTests {
         #expect(SymbolKind.remapped(before[1],from:before,to:after) == after[1])
         #expect(SymbolKind.remapped(CGPoint(x:1,y:1),from:before,to:after) == nil)
     }
+
+    // MARK: block resizing
+
+    @Test func blockSizesSnapToThirtyPointStepsWithinLimits() {
+        typealias Size = CGSize
+        #expect(BlockSize.standard == Size(width:90,height:30))
+        #expect(BlockSize.snapped(Size(width:90,height:30)) == Size(width:90,height:30))
+        #expect(BlockSize.snapped(Size(width:104,height:44)) == Size(width:90,height:30))     // rounds down
+        #expect(BlockSize.snapped(Size(width:106,height:46)) == Size(width:120,height:60))     // rounds up
+        #expect(BlockSize.snapped(Size(width:1000,height:1000)) == Size(width:300,height:180)) // maximum
+        #expect(BlockSize.snapped(Size(width:-50,height:0)) == Size(width:90,height:30))       // minimum
+        for width in stride(from:0.0,through:400.0,by:7.0) { for height in stride(from:0.0,through:250.0,by:7.0) {
+            let size = BlockSize.snapped(Size(width:width,height:height))
+            #expect(size.height.truncatingRemainder(dividingBy:30) == 0 && size.height >= 30 && size.height <= 180)
+            #expect(size.width.truncatingRemainder(dividingBy:30) == 0 && size.width >= 90 && size.width <= 300)
+        } }
+    }
+
+    @Test func draggingACornerKeepsTheOppositeCornerFixed() {
+        let center = CGPoint(x:370,y:250), size = BlockSize.standard        // top-left (325,235), bottom-right (415,265)
+        func corners(_ c: CGPoint, _ s: CGSize) -> (CGPoint,CGPoint) { (CGPoint(x:c.x-s.width/2,y:c.y-s.height/2),CGPoint(x:c.x+s.width/2,y:c.y+s.height/2)) }
+        let br = BlockSize.resized(center:center,size:size,sx:1,sy:1,translation:CGSize(width:60,height:60))
+        #expect(br.size == CGSize(width:150,height:90))
+        #expect(corners(br.center,br.size).0 == CGPoint(x:325,y:235))
+        let tl = BlockSize.resized(center:br.center,size:br.size,sx:-1,sy:-1,translation:CGSize(width:-30,height:-30))
+        #expect(tl.size == CGSize(width:180,height:120))
+        #expect(corners(tl.center,tl.size).1 == corners(br.center,br.size).1)
+        let tr = BlockSize.resized(center:center,size:size,sx:1,sy:-1,translation:CGSize(width:30,height:-30))
+        #expect(corners(tr.center,tr.size).0.x == 325 && corners(tr.center,tr.size).1.y == 265)
+        // Dragging past the limit stops at the limit and the fixed corner still holds.
+        let huge = BlockSize.resized(center:center,size:size,sx:1,sy:1,translation:CGSize(width:900,height:900))
+        #expect(huge.size == CGSize(width:300,height:180) && corners(huge.center,huge.size).0 == CGPoint(x:325,y:235))
+        // A drag too small to reach the next step changes nothing.
+        let none = BlockSize.resized(center:center,size:size,sx:1,sy:1,translation:CGSize(width:10,height:10))
+        #expect(none.size == size && none.center == center)
+    }
+
+    @Test func blockPinsUseTheFirstRowSlotAndBodiesFollowTheSize() {
+        let center = CGPoint(x:400,y:300)
+        for kind in SymbolKind.allCases where kind.isBlock {
+            #expect(kind.pins(at:center,size:BlockSize.standard) == [CGPoint(x:355,y:300),CGPoint(x:445,y:300)])
+            let size = CGSize(width:150,height:90)
+            let body = kind.body(at:center,rotation:0,size:size)
+            #expect(body == CGRect(x:325,y:255,width:150,height:90))
+            let pins = kind.pins(at:center,size:size)
+            #expect(pins == [CGPoint(x:325,y:270),CGPoint(x:475,y:270)])          // top + 15, on the left / right edges
+            #expect(pins.allSatisfy { $0.y > body.minY && $0.y < body.maxY })
+        }
+        // Circuit symbols ignore any size.
+        #expect(SymbolKind.resistor.pins(at:center,size:CGSize(width:300,height:180)) == SymbolKind.resistor.pins(at:center))
+    }
 }

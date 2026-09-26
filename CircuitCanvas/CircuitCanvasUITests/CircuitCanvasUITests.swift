@@ -233,7 +233,10 @@ final class CircuitCanvasUITests: XCTestCase {
                 default: return (CGRect(x:xy[0],y:xy[1]-15,width:60,height:30),15)
                 }
             }
-            return (CGRect(x:xy[0],y:xy[1]-15,width:90,height:30),24)
+            // Blocks: the pins sit in the first row slot (15pt below the top edge); the size element gives width,height.
+            let size = coordinates(element(app,"symbol-\(name)-size"))
+            let box = size.count == 2 ? CGSize(width:size[0],height:size[1]) : CGSize(width:90,height:30)
+            return (CGRect(x:xy[0],y:xy[1]-15,width:box.width,height:box.height),24)
         }
         let bodies = entries.map(\.rect)
         var routes: [[CGPoint]] = []
@@ -251,7 +254,7 @@ final class CircuitCanvasUITests: XCTestCase {
                         : a.x > r.minX && a.x < r.maxX && max(a.y,b.y) > r.minY && min(a.y,b.y) < r.maxY
                     XCTAssertFalse(inside,"wire \(i) intersects \(r)")
                     let terminal = (a == points.first || b == points.last) &&
-                        [points.first!,points.last!].contains { $0.y == r.midY && ($0.x == r.minX || $0.x == r.maxX) || $0.x == r.midX && ($0.y == r.minY || $0.y == r.maxY) }
+                        [points.first!,points.last!].contains { ($0.y > r.minY && $0.y < r.maxY && ($0.x == r.minX || $0.x == r.maxX)) || ($0.x > r.minX && $0.x < r.maxX && ($0.y == r.minY || $0.y == r.maxY)) }
                     if !terminal {
                         let padded = r.insetBy(dx:-12,dy:-12)
                         let tooClose = a.y == b.y
@@ -280,7 +283,7 @@ final class CircuitCanvasUITests: XCTestCase {
                     continue
                 }
                 XCTAssertEqual(pin.y,next.y)
-                let owner = entries.first { $0.rect.midY == pin.y && ($0.rect.minX == pin.x || $0.rect.maxX == pin.x) }
+                let owner = entries.first { pin.y > $0.rect.minY && pin.y < $0.rect.maxY && ($0.rect.minX == pin.x || $0.rect.maxX == pin.x) }
                 let left = owner.map { $0.rect.minX == pin.x } ?? false
                 XCTAssertTrue(left ? next.x < pin.x : next.x > pin.x)
                 let gaps = bodies.filter { $0.minY < pin.y && $0.maxY > pin.y }.compactMap { body -> CGFloat? in
@@ -775,6 +778,72 @@ final class CircuitCanvasUITests: XCTestCase {
         for index in 0..<3 {
             XCTAssertEqual(coordinates(element(app,"wire-\(3+index)")),after[index] + coordinates(pin("NPNトランジスタ",index)),"wire \(index) after drag")
         }
+    }
+
+    /// Block resizing (2A) in one launch: handles, corner-anchored drags with 30pt snapping and limits,
+    /// pins in the first row slot, attached wires following, circuit symbols without handles, and the reset.
+    @MainActor
+    func testBlockResizeHandlesSnappingLimitsWiresAndReset() {
+        let app = XCUIApplication(); app.launch()
+        func size(_ name: String) -> [Double] { coordinates(element(app,"symbol-\(name)-size")) }
+        func drag(_ corner: String, _ dx: CGFloat, _ dy: CGFloat) {
+            let handle = element(app,"symbol-Main MCU-resize-\(corner)")
+            XCTAssertTrue(handle.waitForExistence(timeout:2), corner)
+            let start = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:dx,dy:dy)))
+        }
+        // Default size, no handles until the block is selected; a circuit symbol never shows handles.
+        XCTAssertEqual(size("Main MCU"),[90,30])
+        XCTAssertFalse(element(app,"symbol-Main MCU-resize-br").exists)
+        element(app,"symbol-Main MCU").tap()
+        if !element(app,"symbol-Main MCU-resize-tl").waitForExistence(timeout:1) { element(app,"symbol-Main MCU").tap() }   // a tap right after another can be dropped
+        for corner in ["tl","tr","bl","br"] { XCTAssertTrue(element(app,"symbol-Main MCU-resize-\(corner)").waitForExistence(timeout:2), corner) }
+
+        // br: the top-left corner (325,235) stays; 150 x 90; both pins in the first row slot (y = 235 + 15).
+        drag("br",60,60)
+        XCTAssertEqual(size("Main MCU"),[150,90])
+        XCTAssertEqual(coordinates(app.buttons["symbol-Main MCU-pin-0"]),[325,250])
+        XCTAssertEqual(coordinates(app.buttons["symbol-Main MCU-pin-1"]),[475,250])
+        // Attached wires follow (wire 0 ends on pin-0, wire 1 starts on pin-1) and still avoid every block.
+        XCTAssertEqual(coordinates(element(app,"wire-0")).suffix(2),[325,250])
+        XCTAssertEqual(coordinates(element(app,"wire-1")).prefix(2),[475,250])
+        assertRoutesClear(app,count:3)
+
+        // tl: the bottom-right corner (475,325) stays; 180 x 120 -> top-left (295,205).
+        drag("tl",-30,-30)
+        XCTAssertEqual(size("Main MCU"),[180,120])
+        XCTAssertEqual(coordinates(app.buttons["symbol-Main MCU-pin-0"]),[295,220])
+        XCTAssertEqual(coordinates(app.buttons["symbol-Main MCU-pin-1"]),[475,220])
+        assertRoutesClear(app,count:3)
+
+        // A drag too short to reach the next step changes nothing; a long one stops at the limits.
+        drag("br",10,10)
+        XCTAssertEqual(size("Main MCU"),[180,120])
+        drag("br",900,900)
+        XCTAssertEqual(size("Main MCU"),[300,180])
+        drag("tl",900,900)
+        XCTAssertEqual(size("Main MCU"),[90,30])
+        for name in ["24 V → 5 V","CAN","Temperature"] { XCTAssertEqual(size(name),[90,30], name) }
+
+        // Reset returns to 90 x 30 keeping the top-left corner.
+        drag("br",90,60)
+        XCTAssertEqual(size("Main MCU"),[180,90])
+        let topLeft = coordinates(app.buttons["symbol-Main MCU-pin-0"])
+        app.buttons["確認"].tap()
+        app.buttons["inspector-reset-size"].tap()
+        XCTAssertEqual(size("Main MCU"),[90,30])
+        XCTAssertEqual(coordinates(app.buttons["symbol-Main MCU-pin-0"]),[topLeft[0],topLeft[1]+(-15)+15])
+        XCTAssertEqual(coordinates(element(app,"wire-0")).suffix(2),coordinates(app.buttons["symbol-Main MCU-pin-0"]))
+        app.navigationBars["インスペクタ"].swipeDown()
+
+        // A circuit symbol shows no handles and has no size; selecting it hides the block's handles.
+        place(app,category:"受動部品",name:"抵抗",x:200,y:700)
+        element(app,"symbol-抵抗").tap()
+        if !app.buttons["symbol-抵抗-rotate"].waitForExistence(timeout:1) { element(app,"symbol-抵抗").tap() }
+        XCTAssertTrue(app.buttons["symbol-抵抗-rotate"].exists)
+        XCTAssertFalse(element(app,"symbol-抵抗-resize-br").exists)
+        XCTAssertFalse(element(app,"symbol-抵抗-size").exists)
+        XCTAssertFalse(element(app,"symbol-Main MCU-resize-br").exists)
     }
 
     @MainActor

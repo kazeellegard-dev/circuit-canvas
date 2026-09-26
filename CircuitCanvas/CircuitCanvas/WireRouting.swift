@@ -127,12 +127,13 @@ enum WireRouting {
                 let v = direction.vector
                 return CGPoint(x:pin.x+v.x*leadLength,y:pin.y+v.y*leadLength)
             }
+            // A pin on a left/right edge may sit in any row slot of a tall block, not only on the centre line.
             for (i, body) in bodies.enumerated() {
-                if body.midY == pin.y {
+                if pin.y > body.minY && pin.y < body.maxY {
                     if body.minX == pin.x { return CGPoint(x:bounds[i].minX,y:pin.y) }
                     if body.maxX == pin.x { return CGPoint(x:bounds[i].maxX,y:pin.y) }
                 }
-                if body.midX == pin.x {
+                if pin.x > body.minX && pin.x < body.maxX {
                     if body.minY == pin.y { return CGPoint(x:pin.x,y:min(pin.y-24,bounds[i].minY)) }
                     if body.maxY == pin.y { return CGPoint(x:pin.x,y:max(pin.y+24,bounds[i].maxY)) }
                 }
