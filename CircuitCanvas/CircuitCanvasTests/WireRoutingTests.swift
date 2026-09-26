@@ -254,4 +254,67 @@ struct WireRoutingTests {
         let up = WireRouting.route(.init(start:p(475,250),end:p(600,100)),bodies:bodies,occupied:[])
         #expect(up.count >= 2 && up[1].x > 475 && up[1].y == 250)
     }
+
+    // MARK: incremental rerouting (a moved block must not disturb unrelated wires)
+
+    /// Six blocks / four wires; `moved` shifts block 0 (whose pin drives wire 0 only).
+    private func scene(moving delta: CGSize = .zero) -> (bodies: [CGRect], wires: [WireRouting.Wire]) {
+        let centers = [p(120,160),p(420,160),p(120,400),p(420,400),p(120,640),p(420,640)]
+        var bodies = centers.map { CGRect(x:$0.x-45,y:$0.y-15,width:90,height:30) }
+        bodies[0] = bodies[0].offsetBy(dx:delta.width,dy:delta.height)
+        func pin(_ b: Int, _ right: Bool) -> CGPoint { p(right ? bodies[b].maxX : bodies[b].minX, bodies[b].midY) }
+        let wires = [WireRouting.Wire(start:pin(0,true),end:pin(1,false)),
+                     WireRouting.Wire(start:pin(2,true),end:pin(3,false)),
+                     WireRouting.Wire(start:pin(3,true),end:pin(5,true)),
+                     WireRouting.Wire(start:pin(4,true),end:pin(5,false))]
+        return (bodies,wires)
+    }
+
+    @Test func firstRoutingPlansEveryWireInOrderAndLaterRoutingKeepsUnrelatedOnes() {
+        let before = scene()
+        let margins = [CGFloat?](repeating:nil,count:6)
+        let initial = WireRouting.reroute(before.wires,bodies:before.bodies,margins:margins)
+        // Same as planning each wire in turn around the ones before it.
+        var occupied: [[CGPoint]] = []
+        for (i,wire) in before.wires.enumerated() {
+            let expected = WireRouting.route(.init(start:wire.start,end:wire.end),bodies:before.bodies,occupied:occupied,margins:margins)
+            #expect(initial[i] == expected, "wire \(i)")
+            occupied.append(expected)
+        }
+        for delta in [CGSize(width:0,height:30),CGSize(width:36,height:-24),CGSize(width:-60,height:150)] {
+            var after = scene(moving:delta)
+            for i in after.wires.indices { after.wires[i].points = initial[i] }
+            let next = WireRouting.reroute(after.wires,bodies:after.bodies,margins:margins)
+            #expect(next[0].first == after.wires[0].start && next[0].last == after.wires[0].end)
+            #expect(WireRouting.isClear(next[0],bodies:after.bodies))
+            for i in 1..<4 { #expect(next[i] == initial[i], "wire \(i) must not move when block 0 moves by \(delta)") }
+        }
+    }
+
+    @Test func aWireThatABodyNowSitsOnIsRoutedAgainAndOthersStay() {
+        let scene = scene()
+        let margins = [CGFloat?](repeating:nil,count:6)
+        let initial = WireRouting.reroute(scene.wires,bodies:scene.bodies,margins:margins)
+        // Drop block 4 onto wire 1's route.
+        let target = p((scene.wires[1].start.x+scene.wires[1].end.x)/2,(scene.wires[1].start.y+scene.wires[1].end.y)/2)
+        var bodies = scene.bodies
+        bodies[4] = CGRect(x:target.x-45,y:target.y-15,width:90,height:30)
+        var wires = scene.wires
+        for i in wires.indices { wires[i].points = initial[i] }
+        wires[3].start = p(bodies[4].maxX,bodies[4].midY)
+        #expect(!WireRouting.isClear(initial[1],bodies:bodies))
+        let next = WireRouting.reroute(wires,bodies:bodies,margins:margins)
+        #expect(WireRouting.isClear(next[1],bodies:bodies) && next[1] != initial[1])
+        #expect(next[1].first == wires[1].start && next[1].last == wires[1].end)
+        #expect(next[0] == initial[0] && next[2] == initial[2])
+    }
+
+    @Test func manualRoutesAreReattachedNotReplanned() {
+        let scene = scene()
+        var wires = scene.wires
+        wires[0].manual = true
+        wires[0].manualPoints = [wires[0].start,p(200,160),p(200,220),p(300,220),p(300,160),wires[0].end]
+        let next = WireRouting.reroute(wires,bodies:scene.bodies,margins:[CGFloat?](repeating:nil,count:6))
+        #expect(next[0] == WireRouting.reattach(wires[0].manualPoints,start:wires[0].start,end:wires[0].end))
+    }
 }

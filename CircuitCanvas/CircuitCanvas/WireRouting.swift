@@ -16,6 +16,12 @@ enum WireRouting {
         var startDirection: Direction? = nil
         var endDirection: Direction? = nil
     }
+    /// What `reroute` needs to know about one wire.
+    struct Wire {
+        var start: CGPoint, end: CGPoint
+        var startDirection: Direction? = nil, endDirection: Direction? = nil
+        var manual = false, manualPoints: [CGPoint] = [], points: [CGPoint] = []
+    }
     struct Crossing: Equatable { var point: CGPoint; var segment: Int; var radius: CGFloat }
     static func segments(_ p: [CGPoint]) -> [(CGPoint, CGPoint)] { Array(zip(p, p.dropFirst())) }
     static func intersectsInterior(_ a: CGPoint, _ b: CGPoint, _ r: CGRect) -> Bool {
@@ -270,6 +276,31 @@ enum WireRouting {
             accepted = amount
         }
         return candidate(accepted)
+    }
+    /// True when no segment runs through the inside of a body.
+    static func isClear(_ path: [CGPoint], bodies: [CGRect]) -> Bool {
+        !segments(path).contains { a, b in bodies.contains { intersectsInterior(a, b, $0) } }
+    }
+    /// Recomputes only what has to change. A wire keeps its current route while it still joins its two pins
+    /// and does not run through a body; only wires attached to something that moved (or that a body now sits on)
+    /// are routed again, around the kept ones. Rerouting everything on every change made unrelated wires jump:
+    /// each new route shifted the ones planned after it.
+    static func reroute(_ wires: [Wire], bodies: [CGRect], margins: [CGFloat?]) -> [[CGPoint]] {
+        var result = wires.map(\.points)
+        var pending: [Int] = []
+        for (i, wire) in wires.enumerated() {
+            if wire.manual { result[i] = reattach(wire.manualPoints, start: wire.start, end: wire.end) }
+            else if wire.points.count < 2 || wire.points.first != wire.start || wire.points.last != wire.end
+                        || !isClear(wire.points, bodies: bodies) { pending.append(i) }
+        }
+        var occupied = wires.indices.filter { !pending.contains($0) }.map { result[$0] }
+        for i in pending {
+            let wire = wires[i]
+            result[i] = route(.init(start: wire.start, end: wire.end, startDirection: wire.startDirection, endDirection: wire.endDirection),
+                              bodies: bodies, occupied: occupied, margins: margins)
+            occupied.append(result[i])
+        }
+        return result
     }
     static func reattach(_ path: [CGPoint], start: CGPoint, end: CGPoint) -> [CGPoint] {
         guard path.count >= 4 else { return path }

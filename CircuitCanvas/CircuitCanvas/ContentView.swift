@@ -237,8 +237,8 @@ struct ContentView: View {
                             selectedNote = nil
                         }
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 4)
-                                .onChanged { value in move(symbolID: symbol.id, by: value.translation) }
+                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                                .onChanged { value in move(symbolID: symbol.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
                                 .onEnded { _ in dragOrigins[symbol.id] = nil }
                         )
                 }
@@ -284,8 +284,8 @@ struct ContentView: View {
                     )
                         .position(note.position)
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 4)
-                                .onChanged { value in move(noteID: note.id, by: value.translation) }
+                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                                .onChanged { value in move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
                         )
                         .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { linkingNote = note.id } }
@@ -525,14 +525,11 @@ struct ContentView: View {
         return nil
     }
     private func reroute() {
-        var occupied = wires.filter(\.manual).map { WireRouting.reattach($0.manualPoints, start: $0.start, end: $0.end) }
-        for i in wires.indices {
-            if wires[i].manual { wires[i].points = WireRouting.reattach(wires[i].manualPoints, start: wires[i].start, end: wires[i].end) }
-            else {
-                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end, startDirection:direction(at:wires[i].start), endDirection:direction(at:wires[i].end)), bodies: bodies, occupied: occupied, margins: routingMargins)
-                occupied.append(wires[i].points)
-            }
-        }
+        let planned = WireRouting.reroute(wires.map {
+            WireRouting.Wire(start: $0.start, end: $0.end, startDirection: direction(at:$0.start), endDirection: direction(at:$0.end),
+                             manual: $0.manual, manualPoints: $0.manualPoints, points: $0.points)
+        }, bodies: bodies, margins: routingMargins)
+        for i in wires.indices { wires[i].points = planned[i] }
     }
     private func pointValue(_ points: [CGPoint]) -> String { points.map { "\($0.x),\($0.y)" }.joined(separator: ";") }
     private func interiorSegments(_ points: [CGPoint]) -> [Int] { points.count > 3 ? Array(1..<(points.count-2)) : [] }
