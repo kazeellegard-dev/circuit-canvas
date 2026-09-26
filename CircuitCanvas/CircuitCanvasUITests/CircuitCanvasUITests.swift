@@ -466,48 +466,85 @@ final class CircuitCanvasUITests: XCTestCase {
 
     // Start through viewport coordinates, independently of the tiny accessibility
     // target. Both sides of the short line must work when the background gets input.
+    /// One launch for the short-line / crossing scenarios that used to be six tests.
+    /// After the initial nudge of wire 0 (which makes wire 2's short horizontal line cross it),
+    /// every variant moves wire 2's short line up by 97pt and puts it back, so the next variant
+    /// starts from the same state:
+    ///  - touches on the visible line through viewport coordinates (both sides, and diagonal),
+    ///  - touches on the accessibility target (straight and diagonal),
+    ///  - finally the crossing arc appears and disappears without changing endpoints.
     @MainActor
-    func testShortLineFromViewportDoesNotPan() {
-        assertShortLineFromViewport(touchOffset: -1, diagonal: 0, returnToOrigin: false)
-    }
-
-    @MainActor
-    func testShortLineFromViewportUpdatesCrossing() {
-        assertShortLineFromViewport(touchOffset: 1, diagonal: 0, returnToOrigin: true)
-    }
-
-    @MainActor
-    func testShortLineFromViewportDiagonalReturnKeepsCanvasFixed() {
-        assertShortLineFromViewport(touchOffset: 0, diagonal: 18, returnToOrigin: true)
-    }
-
-    @MainActor
-    private func assertShortLineFromViewport(touchOffset: CGFloat, diagonal: CGFloat, returnToOrigin: Bool) {
+    func testShortHorizontalLineDragsAndCrossings() {
         let app = XCUIApplication(); app.launch()
-        let vertical = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        vertical.press(forDuration:0.2,thenDragTo:vertical.withOffset(CGVector(dx:-6,dy:0)))
+        func drag(_ id: String, _ dx: CGFloat, _ dy: CGFloat) {
+            let target = element(app,id)
+            XCTAssertTrue(target.isHittable, id)
+            let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
+        }
+        drag("wire-0-segment-1",-6,0)
+        XCTAssertEqual(routePoints(app,0)[1].x,265,accuracy:1)
         let canvas = element(app,"circuit-canvas")
         let viewport = canvas.value as? String
         let before = routePoints(app,2)
         let endpoints = coordinates(element(app,"wire-2"))
+        let symbols = ["24 V → 5 V","Main MCU","CAN","Temperature"].map { element(app,"symbol-\($0)").value as? String }
         let origin = canvas.coordinate(withNormalizedOffset:.zero)
-        let source = origin.withOffset(CGVector(dx:(before[2].x+before[3].x)/2+touchOffset,dy:before[2].y))
-        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:diagonal,dy:-97)))
-        let after = routePoints(app,2)
-        XCTAssertEqual(after.count,before.count)
-        for i in before.indices {
-            XCTAssertEqual(after[i].x,before[i].x,accuracy:1)
-            XCTAssertEqual(after[i].y,before[i].y - ([2,3].contains(i) ? 97 : 0),accuracy:1)
+
+        func assertMoved(_ after: [CGPoint], xAccuracy: CGFloat) {
+            XCTAssertEqual(after.count,before.count)
+            for i in before.indices {
+                XCTAssertEqual(after[i].x,before[i].x,accuracy:xAccuracy)
+                XCTAssertEqual(after[i].y,before[i].y - ([2,3].contains(i) ? 97 : 0),accuracy:1)
+            }
+            XCTAssertEqual(coordinates(element(app,"wire-0-hops")),[265,205])
         }
-        XCTAssertEqual(coordinates(element(app,"wire-0-hops")),[265,205])
-        if returnToOrigin {
+        func assertRestored(_ restored: [CGPoint]) {
+            XCTAssertEqual(restored.count,before.count)
+            for i in before.indices {
+                XCTAssertEqual(restored[i].x,before[i].x,accuracy:0.1)
+                XCTAssertEqual(restored[i].y,before[i].y,accuracy:1)
+            }
+            XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
+            XCTAssertEqual(canvas.value as? String,viewport)
+            XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
+        }
+
+        // Viewport touches: -1 / +1 of the line's midpoint (must not pan), and a diagonal one.
+        for (touchOffset, diagonal) in [(CGFloat(-1),CGFloat(0)),(1,0),(0,18)] {
+            let source = origin.withOffset(CGVector(dx:(before[2].x+before[3].x)/2+touchOffset,dy:before[2].y))
+            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:diagonal,dy:-97)))
+            assertMoved(routePoints(app,2),xAccuracy:1)
+            XCTAssertEqual(canvas.value as? String,viewport)
+            let after = routePoints(app,2)
             let back = origin.withOffset(CGVector(dx:(after[2].x+after[3].x)/2,dy:after[2].y))
             back.press(forDuration:0.2,thenDragTo:back.withOffset(CGVector(dx:-diagonal,dy:97)))
             XCTAssertEqual(routePoints(app,2),before)
-            XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
+            assertRestored(routePoints(app,2))
         }
-        XCTAssertEqual(canvas.value as? String,viewport)
-        XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
+
+        // Accessibility target: straight (must not select the adjacent vertical line) and diagonal.
+        for diagonal in [CGFloat(0),18] {
+            drag("wire-2-segment-2",diagonal,-97)
+            assertMoved(routePoints(app,2),xAccuracy:0.1)
+            XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
+            XCTAssertEqual(canvas.value as? String,viewport)
+            drag("wire-2-segment-2",-diagonal,97)
+            assertRestored(routePoints(app,2))
+        }
+        XCTAssertEqual(["24 V → 5 V","Main MCU","CAN","Temperature"].map { element(app,"symbol-\($0)").value as? String },symbols)
+
+        // The crossing arc appears with the move and disappears when the other wire moves away.
+        let wire0Endpoints = coordinates(element(app,"wire-0"))
+        drag("wire-2-segment-2",0,-97)
+        XCTAssertEqual(routePoints(app,2)[2].y,205,accuracy:1)
+        let hops = element(app,"wire-0-hops")
+        XCTAssertFalse((hops.value as? String ?? "").isEmpty)
+        XCTAssertEqual(coordinates(element(app,"wire-0")),wire0Endpoints)
+        XCTAssertFalse(element(app,"wire-3").exists)
+        drag("wire-0-segment-1",-30,0)
+        XCTAssertEqual(hops.value as? String,"")
+        XCTAssertEqual(coordinates(element(app,"wire-0")),wire0Endpoints)
         assertWireCount(app,"3")
     }
 
@@ -520,91 +557,6 @@ final class CircuitCanvasUITests: XCTestCase {
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
         XCTAssertEqual(routePoints(app,2),before)
         XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=0, offsetY=-97")
-    }
-
-    @MainActor
-    func testShortHorizontalSegmentDragDoesNotSelectAdjacentVerticalSegment() {
-        let app = XCUIApplication(); app.launch()
-        let before = routePoints(app,2)
-        let viewport = element(app,"circuit-canvas").value as? String
-        let endpoints = coordinates(element(app,"wire-2"))
-        let source = element(app,"wire-2-segment-2")
-            .coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
-        let after = routePoints(app,2)
-        XCTAssertEqual(after.count,before.count)
-        for index in before.indices {
-            XCTAssertEqual(after[index].x,before[index].x,accuracy:0.1)
-            XCTAssertEqual(after[index].y,before[index].y - ([2,3].contains(index) ? 97 : 0),accuracy:1)
-        }
-        XCTAssertEqual(coordinates(element(app,"wire-2")),endpoints)
-        XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
-        assertWireCount(app,"3")
-    }
-
-    @MainActor
-    func testCrossingMetadataAppearsAndDisappearsWithoutChangingEndpoints() {
-        let app = XCUIApplication(); app.launch()
-        let endpoint = coordinates(element(app,"wire-0"))
-        func drag(_ id: String, _ dx: CGFloat, _ dy: CGFloat) {
-            let source = element(app,id).coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
-        }
-        drag("wire-0-segment-1",-6,0)
-        XCTAssertEqual(routePoints(app,0)[1].x,265,accuracy:1)
-        drag("wire-2-segment-2",0,-97)
-        XCTAssertEqual(routePoints(app,2)[2].y,205,accuracy:1)
-        let hops = element(app,"wire-0-hops")
-        XCTAssertFalse((hops.value as? String ?? "").isEmpty)
-        XCTAssertEqual(coordinates(element(app,"wire-0")),endpoint)
-        XCTAssertFalse(element(app,"wire-3").exists)
-        drag("wire-0-segment-1",-30,0)
-        XCTAssertEqual(hops.value as? String,"")
-        XCTAssertEqual(coordinates(element(app,"wire-0")),endpoint)
-        assertWireCount(app,"3")
-    }
-
-    @MainActor
-    func testShortHorizontalDiagonalDragAndReturnRecomputesCrossings() {
-        let app = XCUIApplication(); app.launch()
-        func drag(_ id: String, _ dx: CGFloat, _ dy: CGFloat) {
-            let target = element(app,id)
-            XCTAssertTrue(target.isHittable)
-            let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-            source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:dx,dy:dy)))
-        }
-        drag("wire-0-segment-1",-6,0)
-        let before = routePoints(app,2)
-        let viewport = element(app,"circuit-canvas").value as? String
-        let symbols = ["24 V → 5 V","Main MCU","CAN","Temperature"].map {
-            element(app,"symbol-\($0)").value as? String
-        }
-        drag("wire-2-segment-2",18,-97)
-        let after = routePoints(app,2)
-        XCTAssertEqual(after.count,before.count)
-        for index in before.indices {
-            XCTAssertEqual(after[index].x,before[index].x,accuracy:0.1)
-            XCTAssertEqual(after[index].y,before[index].y - ([2,3].contains(index) ? 97 : 0),accuracy:1)
-        }
-        let hops = coordinates(element(app,"wire-0-hops"))
-        XCTAssertEqual(hops.count,2)
-        if hops.count == 2 {
-            XCTAssertEqual(hops[0],265,accuracy:1)
-            XCTAssertEqual(hops[1],205,accuracy:1)
-        }
-        drag("wire-2-segment-2",-18,97)
-        let restored = routePoints(app,2)
-        for index in before.indices {
-            XCTAssertEqual(restored[index].x,before[index].x,accuracy:0.1)
-            XCTAssertEqual(restored[index].y,before[index].y,accuracy:1)
-        }
-        XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
-        XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
-        XCTAssertEqual(["24 V → 5 V","Main MCU","CAN","Temperature"].map {
-            element(app,"symbol-\($0)").value as? String
-        },symbols)
-        XCTAssertEqual(coordinates(element(app,"wire-2")),[195,390,295,250])
-        assertWireCount(app,"3")
     }
 
     @MainActor
