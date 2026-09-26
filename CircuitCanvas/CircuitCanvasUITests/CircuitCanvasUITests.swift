@@ -278,6 +278,16 @@ final class CircuitCanvasUITests: XCTestCase {
     private func assertRoutesClear(_ app: XCUIApplication, count: Int, extraSymbols: [String] = []) {
         let bodies = (["24 V → 5 V","Main MCU","CAN","Temperature"] + extraSymbols).map { name -> CGRect in
             let xy = coordinates(app.buttons["symbol-\(name)-pin-0"])
+            let angle = element(app,"symbol-\(name)-rotation")
+            if angle.exists {
+                let rotation = Int(angle.value as? String ?? "0") ?? 0
+                switch rotation {
+                case 90: return CGRect(x:xy[0]-22,y:xy[1],width:44,height:100)
+                case 180: return CGRect(x:xy[0]-100,y:xy[1]-22,width:100,height:44)
+                case 270: return CGRect(x:xy[0]-22,y:xy[1]-100,width:44,height:100)
+                default: return CGRect(x:xy[0],y:xy[1]-22,width:100,height:44)
+                }
+            }
             return CGRect(x:xy[0],y:xy[1]-32,width:150,height:64)
         }
         var routes: [[CGPoint]] = []
@@ -295,7 +305,7 @@ final class CircuitCanvasUITests: XCTestCase {
                         : a.x > r.minX && a.x < r.maxX && max(a.y,b.y) > r.minY && min(a.y,b.y) < r.maxY
                     XCTAssertFalse(inside,"wire \(i) intersects \(r)")
                     let terminal = (a == points.first || b == points.last) &&
-                        [points.first!,points.last!].contains { $0.y == r.midY && ($0.x == r.minX || $0.x == r.maxX) }
+                        [points.first!,points.last!].contains { $0.y == r.midY && ($0.x == r.minX || $0.x == r.maxX) || $0.x == r.midX && ($0.y == r.minY || $0.y == r.maxY) }
                     if !terminal {
                         let padded = r.insetBy(dx:-12,dy:-12)
                         let tooClose = a.y == b.y
@@ -317,6 +327,12 @@ final class CircuitCanvasUITests: XCTestCase {
                 }
             }
             for (pin,next) in [(points[0],points[1]),(points.last!,points[points.count-2])] {
+                if let body = bodies.first(where: { $0.midX == pin.x && ($0.minY == pin.y || $0.maxY == pin.y) }) {
+                    XCTAssertEqual(pin.x,next.x)
+                    XCTAssertTrue(body.minY == pin.y ? next.y < pin.y : next.y > pin.y)
+                    XCTAssertGreaterThanOrEqual(abs(next.y-pin.y),24)
+                    continue
+                }
                 XCTAssertEqual(pin.y,next.y)
                 let left = bodies.contains { $0.minX == pin.x && $0.midY == pin.y }
                 XCTAssertTrue(left ? next.x < pin.x : next.x > pin.x)
@@ -621,6 +637,16 @@ final class CircuitCanvasUITests: XCTestCase {
                 XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"))
                 XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains(category == "ブロック" ? "style=block" : "style=circuit"))
                 XCTAssertTrue(app.buttons["symbol-\(name)-pin-0"].firstMatch.exists)
+                if category != "ブロック" {
+                    let rotation = name == "VCC" ? 270 : category == "電源" ? 90 : 0
+                    XCTAssertEqual(element(app,"symbol-\(name)-rotation").value as? String,"\(rotation)")
+                    let first = coordinates(app.buttons["symbol-\(name)-pin-0"])
+                    XCTAssertEqual(first, rotation == 90 ? [380,480] : rotation == 270 ? [380,580] : [330,530])
+                    if name != "GND" && name != "VCC" {
+                        let second = coordinates(app.buttons["symbol-\(name)-pin-1"])
+                        XCTAssertEqual(second, rotation == 90 ? [380,580] : [430,530])
+                    }
+                }
                 XCTAssertEqual(app.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name != "GND" && name != "VCC")
                 app.terminate()
             }
@@ -666,6 +692,82 @@ final class CircuitCanvasUITests: XCTestCase {
         app.buttons["シンボルを削除"].tap()
         XCTAssertFalse(element(app,"symbol-接地").exists)
         XCTAssertEqual(element(app,"wire-count").value as? String,"4")
+    }
+
+    @MainActor
+    func testCircuitRotationControlsPreserveCenterAndWiring() {
+        let app = XCUIApplication(); app.launch()
+        element(app,"symbol-Main MCU").tap()
+        XCTAssertFalse(app.buttons["symbol-Main MCU-rotate"].exists)
+        app.buttons["確認"].tap()
+        XCTAssertFalse(app.buttons["inspector-rotate"].exists)
+        app.navigationBars["インスペクタ"].swipeDown()
+        place(app,category:"受動部品",name:"抵抗",x:380,y:530)
+        app.buttons["配線"].tap()
+        app.buttons["symbol-Main MCU-pin-1"].tap()
+        app.buttons["symbol-抵抗-pin-0"].tap()
+        element(app,"symbol-抵抗").tap()
+        let viewport = element(app,"circuit-canvas").value as? String
+        for rotation in [90,180,270,0] {
+            let button = app.buttons["symbol-抵抗-rotate"]
+            button.tap()
+            XCTAssertEqual(element(app,"symbol-抵抗-rotation").value as? String,"\(rotation)")
+            let first = coordinates(app.buttons["symbol-抵抗-pin-0"])
+            let second = coordinates(app.buttons["symbol-抵抗-pin-1"])
+            XCTAssertEqual((first[0]+second[0])/2,380,accuracy:1)
+            XCTAssertEqual((first[1]+second[1])/2,530,accuracy:1)
+            XCTAssertEqual(abs(first[0]-second[0])+abs(first[1]-second[1]),100,accuracy:1)
+            XCTAssertEqual(coordinates(element(app,"wire-3")),[445,250]+first)
+            assertRoutesClear(app,count:4,extraSymbols:["抵抗"])
+        }
+        XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
+        app.buttons["確認"].tap()
+        for rotation in [90,180,270,0] {
+            app.buttons["inspector-rotate"].tap()
+            XCTAssertEqual(element(app,"symbol-抵抗-rotation").value as? String,"\(rotation)")
+            XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり")
+        }
+        app.buttons["シンボルを削除"].tap()
+        XCTAssertFalse(element(app,"symbol-抵抗").exists)
+        XCTAssertEqual(element(app,"wire-count").value as? String,"3")
+    }
+
+    @MainActor
+    func testVerticalPowerSegmentDragBranchAndRotation() {
+        let app = XCUIApplication(); app.launch()
+        place(app,category:"電源",name:"直流電源",x:300,y:530)
+        place(app,category:"電源",name:"GND",x:650,y:530)
+        app.buttons["配線"].tap()
+        app.buttons["symbol-直流電源-pin-1"].tap()
+        app.buttons["symbol-GND-pin-0"].tap()
+        let before = routePoints(app,3)
+        guard let segment = (1..<max(1,before.count-2)).first(where: {
+            before[$0].y == before[$0+1].y && abs(before[$0].x-before[$0+1].x) > 40
+        }) else { return XCTFail("上下端子を結ぶ水平の中間線分が必要") }
+        let start = element(app,"wire-3-segment-\(segment)").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:0,dy:20)))
+        let after = routePoints(app,3)
+        XCTAssertEqual(after.first,before.first)
+        XCTAssertEqual(after.last,before.last)
+        XCTAssertEqual(after[segment].x,before[segment].x)
+        XCTAssertGreaterThan(after[segment].y,before[segment].y+10)
+        app.buttons["配線"].tap()
+        app.buttons["symbol-直流電源-pin-1"].tap()
+        app.buttons["symbol-CAN-pin-1"].tap()
+        XCTAssertFalse((element(app,"canvas-junctions").value as? String ?? "").isEmpty)
+        let junctions = (element(app,"canvas-junctions").value as? String ?? "").split(separator:";").map {
+            $0.split(separator:",").compactMap { Double($0) }
+        }
+        XCTAssertTrue(junctions.contains { $0.count == 2 && $0[0] == 300 && $0[1] > 580 })
+        element(app,"symbol-直流電源").tap()
+        app.buttons["symbol-直流電源-rotate"].tap()
+        XCTAssertEqual(element(app,"symbol-直流電源-rotation").value as? String,"180")
+        XCTAssertEqual(coordinates(app.buttons["symbol-直流電源-pin-0"]),[350,530])
+        assertRoutesClear(app,count:5,extraSymbols:["直流電源","GND"])
+        let source = element(app,"symbol-直流電源").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:20,dy:-20)))
+        XCTAssertEqual(coordinates(element(app,"wire-3")).prefix(2).map { $0 },coordinates(app.buttons["symbol-直流電源-pin-1"]))
+        assertRoutesClear(app,count:5,extraSymbols:["直流電源","GND"])
     }
 
     @MainActor

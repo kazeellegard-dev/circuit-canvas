@@ -9,7 +9,7 @@ import SwiftUI
 
 private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
-private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var icon: String { kind.icon } }
+private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var icon: String { kind.icon }; init(title: String, kind: SymbolKind, position: CGPoint) { self.title = title; self.kind = kind; self.position = position; self.rotation = kind.defaultRotation } }
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint? }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
@@ -99,7 +99,7 @@ struct ContentView: View {
                                 if kind.isBlock {
                                     Image(systemName: kind.icon).font(.title3).frame(height: 32)
                                 } else {
-                                    CircuitSymbolShape(kind: kind).stroke(lineWidth: 1.5).frame(width: 75, height: 32)
+                                    CircuitGlyph(kind:kind, rotation:kind.defaultRotation).scaleEffect(0.3).frame(width:75,height:32)
                                 }
                                 Text(kind.rawValue).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
                             }
@@ -211,6 +211,11 @@ struct ContentView: View {
                         isConnected: isConnected(symbol),
                         selected: selectedSymbol == symbol.id,
                         wireStartPinIndex: pendingWirePinIndex(for: symbol),
+                        select: {
+                            guard tool == .select else { return }
+                            selectedSymbol = symbol.id
+                            selectedNote = nil
+                        },
                         selectPin: { index in
                             guard tool == .wire else { return }
                             selectWirePin(pins(for: symbol)[index])
@@ -227,6 +232,19 @@ struct ContentView: View {
                                 .onChanged { value in move(symbolID: symbol.id, by: value.translation) }
                                 .onEnded { _ in dragOrigins[symbol.id] = nil }
                         )
+                }
+                if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), !symbol.kind.isBlock {
+                    let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation)
+                    Button { rotateSymbol(id) } label: {
+                        Image(systemName:"arrow.clockwise")
+                            .frame(width:32,height:32)
+                            .background(.regularMaterial,in:Circle())
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x:bounds.maxX+24,y:bounds.minY-24)
+                    .accessibilityLabel("回転")
+                    .accessibilityIdentifier("symbol-\(symbol.title)-rotate")
                 }
                 ForEach($notes) { $note in
                     NoteCard(
@@ -272,6 +290,10 @@ struct ContentView: View {
                     LabeledContent("接続", value: isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                         .accessibilityIdentifier("symbol-connection-status")
                         .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
+                    if !symbol.wrappedValue.kind.isBlock {
+                        Button("回転", systemImage:"arrow.clockwise") { rotateSymbol(id) }
+                            .accessibilityIdentifier("inspector-rotate")
+                    }
                     Button("シンボルを削除", role: .destructive) {
                         removeSymbol(id)
                     }
@@ -336,6 +358,20 @@ struct ContentView: View {
             get: { notes.first(where: { $0.id == id }) ?? initial },
             set: { updated in guard let index = notes.firstIndex(where: { $0.id == id }) else { return }; notes[index] = updated }
         )
+    }
+    private func rotateSymbol(_ id: UUID) {
+        guard let i = symbols.firstIndex(where: { $0.id == id }), !symbols[i].kind.isBlock else { return }
+        let old = pins(for:symbols[i])
+        symbols[i].rotation = (symbols[i].rotation + 90) % 360
+        let new = pins(for:symbols[i])
+        for j in wires.indices {
+            for k in old.indices {
+                if wires[j].start == old[k] { wires[j].start = new[k]; wires[j].manual = false }
+                if wires[j].end == old[k] { wires[j].end = new[k]; wires[j].manual = false }
+            }
+        }
+        if let pin = pendingWireStart, let k = old.firstIndex(of:pin) { pendingWireStart = new[k] }
+        reroute()
     }
     private func removeSymbol(_ id: UUID) {
         guard let symbol = symbols.first(where: { $0.id == id }) else { return }
@@ -415,7 +451,7 @@ struct ContentView: View {
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
-    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position) }
+    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
     private func isConnected(_ symbol: SymbolItem) -> Bool { pins(for: symbol).contains { pin in wires.contains { $0.start.distance(to: pin) < 1 || $0.end.distance(to: pin) < 1 } } }
 
@@ -423,13 +459,21 @@ struct ContentView: View {
         Label(text, systemImage: icon).font(.footnote.weight(.medium)).padding(10)
             .background(.thinMaterial, in: Capsule()).accessibilityIdentifier("operation-hint")
     }
-    private var bodies: [CGRect] { symbols.map { CGRect(x: $0.position.x-75, y: $0.position.y-32, width: 150, height: 64) } }
+    private var bodies: [CGRect] { symbols.map { $0.kind.body(at:$0.position, rotation:$0.rotation) } }
+    private func direction(at pin: CGPoint) -> WireRouting.Direction? {
+        for symbol in symbols where !symbol.kind.isBlock {
+            if let index = pins(for:symbol).firstIndex(of:pin) {
+                return symbol.kind.direction(for:index,rotation:symbol.rotation)
+            }
+        }
+        return nil
+    }
     private func reroute() {
         var occupied = wires.filter(\.manual).map { WireRouting.reattach($0.manualPoints, start: $0.start, end: $0.end) }
         for i in wires.indices {
             if wires[i].manual { wires[i].points = WireRouting.reattach(wires[i].manualPoints, start: wires[i].start, end: wires[i].end) }
             else {
-                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end), bodies: bodies, occupied: occupied)
+                wires[i].points = WireRouting.route(.init(start: wires[i].start, end: wires[i].end, startDirection:direction(at:wires[i].start), endDirection:direction(at:wires[i].end)), bodies: bodies, occupied: occupied)
                 occupied.append(wires[i].points)
             }
         }
@@ -475,7 +519,7 @@ struct ContentView: View {
               let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let delta = (horizontal ? translation.height : translation.width) / canvasScale
-        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies)
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: direction(at:wires[i].start) != nil || direction(at:wires[i].end) != nil ? 24 : 0)
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }
@@ -504,9 +548,20 @@ private struct SymbolCard: View {
     let isConnected: Bool
     let selected: Bool
     let wireStartPinIndex: Int?
+    let select: () -> Void
     let selectPin: (Int) -> Void
+    private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation) }
+    private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation) }
     var body: some View {
         ZStack {
+            if !symbol.kind.isBlock {
+                Button(action:select) {
+                    Color.clear.frame(width:bounds.width,height:bounds.height)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+            }
             Group {
                 if symbol.kind.isBlock {
                     VStack(spacing: 6) {
@@ -514,11 +569,8 @@ private struct SymbolCard: View {
                         Text(symbol.title).font(.subheadline.weight(.medium)).lineLimit(1)
                     }
                 } else {
-                    ZStack(alignment: .bottom) {
-                        CircuitSymbolShape(kind: symbol.kind).stroke(.primary, lineWidth: 2)
-                        Text(symbol.title).font(.system(size: 10)).lineLimit(1)
-                            .padding(.horizontal, 8)
-                    }.frame(width: 150, height: 64)
+                    CircuitGlyph(kind:symbol.kind, rotation:symbol.rotation)
+                        .allowsHitTesting(false)
                 }
             }
             .accessibilityElement(children: .ignore)
@@ -526,10 +578,23 @@ private struct SymbolCard: View {
             .accessibilityIdentifier("symbol-\(symbol.title)")
             .accessibilityValue("kind=\(symbol.kind.rawValue), style=\(symbol.kind.isBlock ? "block" : "circuit")")
 
-            pin(0).offset(x: -75)
-            if symbol.kind.pinCount == 2 { pin(1).offset(x: 75) }
+            ForEach(0..<symbol.kind.pinCount, id: \.self) { index in
+                pin(index).offset(x:offsets[index].x,y:offsets[index].y)
+            }
+            if !symbol.kind.isBlock {
+                Text(symbol.title).font(.system(size:10)).fixedSize()
+                    .offset(x:symbol.rotation % 180 == 0 ? 0 : 60,
+                            y:symbol.rotation % 180 == 0 ? 30 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                Text("\(symbol.rotation)").font(.system(size:1)).opacity(0.01)
+                    .accessibilityIdentifier("symbol-\(symbol.title)-rotation")
+                    .accessibilityValue("\(symbol.rotation)")
+                    .allowsHitTesting(false)
+
+            }
         }
-        .frame(width: 150, height: 64)
+        .frame(width: bounds.width, height: bounds.height)
         .background {
             if symbol.kind.isBlock { RoundedRectangle(cornerRadius: 8).fill(.background) }
         }
@@ -556,7 +621,7 @@ private struct SymbolCard: View {
         .buttonStyle(.plain)
         .accessibilityLabel(index == 0 ? "左ピン" : "右ピン")
         .accessibilityIdentifier("symbol-\(symbol.title)-pin-\(index)")
-        .accessibilityValue("\(symbol.position.x + (index == 0 ? -75 : 75)),\(symbol.position.y)")
+        .accessibilityValue("\(symbol.position.x + offsets[index].x),\(symbol.position.y + offsets[index].y)")
         .accessibilityAddTraits(wireStartPinIndex == index ? .isSelected : [])
     }
 }

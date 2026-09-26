@@ -156,4 +156,36 @@ struct WireRoutingTests {
         #expect(WireRouting.crossings(vertical,others:[[p(0,3),p(100,3)]]).first?.radius == 0)
         #expect(WireRouting.crossings([p(150,0),p(150,100)],others:[horizontal]).isEmpty)
     }
+    @Test func rotatedPinsRouteOutwardAvoidBodiesAndShareOnlyTerminalTrunks() {
+        for rotation in [0,90,180,270] {
+            let centers = [p(200,200),p(500,400),p(600,100)]
+            let obstacles = centers.map { SymbolKind.resistor.body(at:$0,rotation:rotation) }
+            let pins = centers.map { SymbolKind.resistor.pins(at:$0,rotation:rotation) }
+            var paths: [[CGPoint]] = []
+            for target in [1,2] {
+                let path = WireRouting.route(.init(start:pins[0][0],end:pins[target][1]),bodies:obstacles,occupied:paths)
+                #expect(path.count >= 4)
+                guard path.count >= 4 else { continue }
+                for (a,b) in WireRouting.segments(path) {
+                    #expect(a.x == b.x || a.y == b.y)
+                    #expect(!obstacles.contains { WireRouting.intersectsInterior(a,b,$0) })
+                }
+                for (pin,next,center) in [(path[0],path[1],centers[0]),(path.last!,path[path.count-2],centers[target])] {
+                    #expect((next.x-pin.x)*(pin.x-center.x)+(next.y-pin.y)*(pin.y-center.y) >= 24*50)
+                }
+                paths.append(path)
+            }
+            #expect(!WireRouting.junctions(paths).isEmpty)
+        }
+    }
+
+    @Test func verticalTerminalManualDragAndReattachment() {
+        let path = [p(100,100),p(100,150),p(300,150),p(300,200)]
+        let moved = WireRouting.moved(path,segment:1,delta:20,bodies:[])
+        #expect(moved == [p(100,100),p(100,170),p(300,170),p(300,200)])
+        let attached = WireRouting.reattach(moved,start:p(110,90),end:p(310,210))
+        #expect(attached == [p(110,90),p(110,170),p(310,170),p(310,210)])
+        #expect(WireRouting.junctions([path,[p(100,100),p(100,130),p(400,130),p(400,200)]]) == [p(100,130)])
+    }
+
 }

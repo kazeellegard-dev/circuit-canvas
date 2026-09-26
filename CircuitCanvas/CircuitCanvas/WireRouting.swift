@@ -4,7 +4,18 @@ import CoreGraphics
 
 /// Logical canvas geometry, independent of rendering and viewport transforms.
 enum WireRouting {
-    struct Connection { var start: CGPoint; var end: CGPoint }
+    enum Direction: Int {
+        case left, up, right, down
+        var vector: CGPoint {
+            switch self { case .left: CGPoint(x:-1,y:0); case .up: CGPoint(x:0,y:-1)
+            case .right: CGPoint(x:1,y:0); case .down: CGPoint(x:0,y:1) }
+        }
+    }
+    struct Connection {
+        var start: CGPoint; var end: CGPoint
+        var startDirection: Direction? = nil
+        var endDirection: Direction? = nil
+    }
     struct Crossing: Equatable { var point: CGPoint; var segment: Int; var radius: CGFloat }
     static func segments(_ p: [CGPoint]) -> [(CGPoint, CGPoint)] { Array(zip(p, p.dropFirst())) }
     static func intersectsInterior(_ a: CGPoint, _ b: CGPoint, _ r: CGRect) -> Bool {
@@ -32,7 +43,8 @@ enum WireRouting {
     static func routingBounds(_ bodies: [CGRect]) -> [CGRect] {
         bodies.map { body in
             var left: CGFloat = 24, right: CGFloat = 24
-            var top: CGFloat = 20, bottom: CGFloat = 20
+            var top: CGFloat = body.width == 44 ? 24 : 20
+            var bottom = top
             for other in bodies where other != body {
                 if other.maxY > body.minY && other.minY < body.maxY {
                     if other.maxX <= body.minX { left = min(left, (body.minX-other.maxX)/2) }
@@ -84,17 +96,27 @@ enum WireRouting {
     }
 
     static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]]) -> [CGPoint] {
-        func outward(_ p: CGPoint) -> CGFloat { bodies.contains { $0.minX == p.x && $0.midY == p.y } ? -1 : 1 }
         let bounds = routingBounds(bodies)
-        func lead(_ pin: CGPoint) -> CGPoint {
-            guard let i = bodies.firstIndex(where: { ($0.minX == pin.x || $0.maxX == pin.x) && $0.midY == pin.y }) else {
-                return CGPoint(x:pin.x+outward(pin)*24,y:pin.y)
+        func lead(_ pin: CGPoint, direction: Direction?) -> CGPoint {
+            if let direction {
+                let v = direction.vector
+                return CGPoint(x:pin.x+v.x*24,y:pin.y+v.y*24)
             }
-            return CGPoint(x:outward(pin) < 0 ? bounds[i].minX : bounds[i].maxX,y:pin.y)
+            for (i, body) in bodies.enumerated() {
+                if body.midY == pin.y {
+                    if body.minX == pin.x { return CGPoint(x:bounds[i].minX,y:pin.y) }
+                    if body.maxX == pin.x { return CGPoint(x:bounds[i].maxX,y:pin.y) }
+                }
+                if body.midX == pin.x {
+                    if body.minY == pin.y { return CGPoint(x:pin.x,y:min(pin.y-24,bounds[i].minY)) }
+                    if body.maxY == pin.y { return CGPoint(x:pin.x,y:max(pin.y+24,bounds[i].maxY)) }
+                }
+            }
+            return CGPoint(x:pin.x+24,y:pin.y)
         }
         let start = wire.start, end = wire.end
-        let s = lead(start), e = lead(end)
-        var xs = [start.x, end.x, s.x, e.x], ys = [start.y,end.y]
+        let s = lead(start,direction:wire.startDirection), e = lead(end,direction:wire.endDirection)
+        var xs = [start.x, end.x, s.x, e.x], ys = [start.y,end.y,s.y,e.y]
         for r in bounds { xs += [r.minX,r.maxX]; ys += [r.minY,r.maxY] }
         for p in occupied.flatMap({ $0 }) { xs += [p.x-12,p.x+12]; ys += [p.y-12,p.y+12] }
         xs = Array(Set(xs)).sorted(); ys = Array(Set(ys)).sorted()
@@ -103,8 +125,8 @@ enum WireRouting {
             for path in occupied {
                 let shared: [CGPoint] = [start,end].filter { $0 == path.first || $0 == path.last }
                 for (c,d) in segments(path) where overlap(a,b,c,d) {
-                    // Only a horizontal trunk incident to the common pin may be shared.
-                    if !shared.contains(where: { pin in (c == pin || d == pin) && a.y == pin.y && b.y == pin.y }) { return false }
+                    // Only a collinear trunk incident to the common pin may be shared.
+                    if !shared.contains(where: { pin in (c == pin || d == pin) && ((a.y == pin.y && b.y == pin.y) || (a.x == pin.x && b.x == pin.x)) }) { return false }
                 }
             }
             return true
@@ -186,7 +208,7 @@ enum WireRouting {
         return nearest
     }
 
-    static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect]) -> [CGPoint] {
+    static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect], minimumTerminalLead: CGFloat = 0) -> [CGPoint] {
         guard segment > 0, segment+1 < path.count-1 else { return path }
         let horizontal = path[segment].y == path[segment+1].y
         func candidate(_ amount: CGFloat) -> [CGPoint] {
@@ -195,7 +217,20 @@ enum WireRouting {
             else { p[segment].x += amount; p[segment+1].x += amount }
             return p
         }
-        func valid(_ p: [CGPoint]) -> Bool { !segments(p).contains { a,b in bodies.contains { intersectsInterior(a,b,$0) } } }
+        func valid(_ p: [CGPoint]) -> Bool {
+            guard !segments(p).contains(where: { a,b in bodies.contains { intersectsInterior(a,b,$0) } }) else { return false }
+            if minimumTerminalLead > 0 {
+                for (pin,next,originalNext) in [(p[0],p[1],path[1]),(p.last!,p[p.count-2],path[path.count-2])] {
+                    let dx = originalNext.x-pin.x, dy = originalNext.y-pin.y
+                    let length = abs(dx)+abs(dy)
+                    guard length > 0, ((next.x-pin.x)*dx+(next.y-pin.y)*dy)/length >= minimumTerminalLead else { return false }
+                }
+                for (a,b) in segments(p).dropFirst().dropLast() {
+                    if bodies.contains(where: { intersectsInterior(a,b,$0.insetBy(dx:-12,dy:-12)) }) { return false }
+                }
+            }
+            return true
+        }
         // Sweep to the first boundary, so a large gesture cannot tunnel through a body.
         var accepted: CGFloat = 0
         let steps = max(1,Int(ceil(abs(delta))))
@@ -213,11 +248,10 @@ enum WireRouting {
     static func reattach(_ path: [CGPoint], start: CGPoint, end: CGPoint) -> [CGPoint] {
         guard path.count >= 4 else { return path }
         var p = path
+        if path[0].x == path[1].x { p[1].x = start.x } else { p[1].y = start.y }
+        if path[path.count-1].x == path[path.count-2].x { p[p.count-2].x = end.x }
+        else { p[p.count-2].y = end.y }
         p[0] = start; p[p.count-1] = end
-        // Terminal leads are horizontal. Extending their neighboring vertical
-        // segments preserves every manually chosen line coordinate.
-        p[1].y = start.y
-        p[p.count-2].y = end.y
         return p
     }
 }
