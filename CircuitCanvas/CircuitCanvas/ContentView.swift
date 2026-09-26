@@ -524,6 +524,13 @@ struct ContentView: View {
         }
         return nil
     }
+    /// Shortest run a dragged segment may leave next to a pin: circuit symbols keep their 15pt lead, block pins at
+    /// least 8pt. A trunk pushed right onto the pin would leave a wire running along the block's edge that
+    /// can no longer be pulled back out.
+    private func terminalLead(at pin: CGPoint) -> CGFloat {
+        if direction(at: pin) != nil { return WireRouting.symbolLead }
+        return symbols.contains { pins(for: $0).contains { $0.distance(to: pin) < 1 } } ? 8 : 0
+    }
     private func reroute() {
         let planned = WireRouting.reroute(wires.map {
             WireRouting.Wire(start: $0.start, end: $0.end, startDirection: direction(at:$0.start), endDirection: direction(at:$0.end),
@@ -572,7 +579,7 @@ struct ContentView: View {
               let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let delta = (horizontal ? translation.height : translation.width) / canvasScale
-        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: direction(at:wires[i].start) != nil || direction(at:wires[i].end) != nil ? WireRouting.symbolLead : 0)
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }

@@ -367,10 +367,12 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(dots.value as? String,"301.0,250.0")
         XCTAssertEqual(coordinates(element(app,"wire-0")),endpoint)
         XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
-        // Move the other terminal trunk to the pin: there is no shared run left.
+        // Push the trunk towards the pin: it stops 12pt short of the block (x = 313) and wire 0's last leg now runs
+        // alongside wire 2's, so the branch dot sits where wire 0 leaves that shared run.
         let trunk = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         trunk.press(forDuration:0.2,thenDragTo:trunk.withOffset(CGVector(dx:44,dy:0)))
-        XCTAssertEqual(dots.value as? String,"")
+        XCTAssertEqual(dots.value as? String,"313.0,250.0")
+        XCTAssertEqual(routePoints(app,0).count,4,"the trunk stays a draggable segment")
         let restore = element(app,"wire-0-segment-1").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         restore.press(forDuration:0.2,thenDragTo:restore.withOffset(CGVector(dx:-44,dy:0)))
         XCTAssertEqual(dots.value as? String,"301.0,250.0")
@@ -420,8 +422,10 @@ final class CircuitCanvasUITests: XCTestCase {
         let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:200,dy:0)))
         let after = routePoints(app,0)
-        XCTAssertEqual(after[1].x,325,accuracy:0.1)
-        XCTAssertEqual(after[2].x,325,accuracy:0.1)
+        // The trunk keeps 12pt clear of the block (x = 325), so it can always be dragged back out.
+        XCTAssertEqual(after.count,4)
+        XCTAssertEqual(after[1].x,313,accuracy:0.1)
+        XCTAssertEqual(after[2].x,313,accuracy:0.1)
         XCTAssertEqual(coordinates(element(app,"wire-0")),[165,160,325,250])
     }
 
