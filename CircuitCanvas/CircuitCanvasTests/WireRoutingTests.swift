@@ -188,4 +188,23 @@ struct WireRoutingTests {
         #expect(WireRouting.junctions([path,[p(100,100),p(100,130),p(400,130),p(400,200)]]) == [p(100,130)])
     }
 
+    /// Regression: with symbols placed close together no route fit, and the wire
+    /// disappeared while both pins still showed as connected.
+    @Test func tightLayoutsStillDrawAnOrthogonalWire() {
+        // A row of vertical parts (VCC among them), a vertical resistor 40pt below it,
+        // and coil / LED / diode 20pt apart on the row beneath.
+        var bodies = [90,210,330,450,570].map { CGRect(x:CGFloat($0)-25,y:670,width:50,height:100) }
+        bodies.append(CGRect(x:105,y:810,width:50,height:100))
+        bodies += [330,450,570].map { CGRect(x:CGFloat($0)-50,y:875,width:100,height:50) }
+        let vccToResistor = WireRouting.Connection(start:p(450,770),end:p(130,810),startDirection:.down,endDirection:.up)
+        let resistorToLED = WireRouting.Connection(start:p(130,910),end:p(400,900),startDirection:.down,endDirection:.left)
+        var occupied: [[CGPoint]] = []
+        for connection in [vccToResistor, resistorToLED] {
+            let path = WireRouting.route(connection, bodies: bodies, occupied: occupied)
+            #expect(path.count >= 2, "wire must be drawn")
+            #expect(path.first == connection.start && path.last == connection.end)
+            for (a,b) in WireRouting.segments(path) { #expect(a.x == b.x || a.y == b.y) }
+            occupied.append(path)
+        }
+    }
 }

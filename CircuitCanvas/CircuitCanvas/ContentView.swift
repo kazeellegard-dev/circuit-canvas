@@ -99,13 +99,14 @@ struct ContentView: View {
                                 if kind.isBlock {
                                     Image(systemName: kind.icon).font(.title3).frame(height: 32)
                                 } else {
-                                    CircuitGlyph(kind:kind, rotation:kind.defaultRotation).scaleEffect(0.3).frame(width:75,height:32)
+                                    CircuitGlyph(kind:kind, rotation:kind.defaultRotation).scaleEffect(kind.defaultRotation % 180 == 0 ? 0.6 : 0.5).frame(width:70,height:50)
                                 }
                                 Text(kind.rawValue).font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
                             }
                             .frame(width: 92, height: 72)
                             .foregroundStyle(selectedLibrary == kind ? Color.accentColor : Color.primary)
                             .background(selectedLibrary == kind ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                            .contentShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(kind.rawValue)を配置")
@@ -582,11 +583,6 @@ private struct SymbolCard: View {
                 pin(index).offset(x:offsets[index].x,y:offsets[index].y)
             }
             if !symbol.kind.isBlock {
-                Text(symbol.title).font(.system(size:10)).fixedSize()
-                    .offset(x:symbol.rotation % 180 == 0 ? 0 : 60,
-                            y:symbol.rotation % 180 == 0 ? 30 : 0)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
                 Text("\(symbol.rotation)").font(.system(size:1)).opacity(0.01)
                     .accessibilityIdentifier("symbol-\(symbol.title)-rotation")
                     .accessibilityValue("\(symbol.rotation)")
@@ -600,12 +596,30 @@ private struct SymbolCard: View {
         }
         .contentShape(Rectangle())
         .overlay {
+            if !symbol.kind.isBlock { label }
+        }
+        .overlay {
             if symbol.kind.isBlock || selected {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(selected ? Color.accentColor.opacity(symbol.kind.isBlock ? 1 : 0.5) : .primary,
                             lineWidth: symbol.kind.isBlock ? (selected ? 3 : 2) : 1)
                     .allowsHitTesting(false)
             }
+        }
+    }
+
+    /// Horizontal symbols: just below the body. Vertical symbols: to the right of it.
+    /// Always upright, never part of the hit area. A zero-size frame anchors the text edge.
+    @ViewBuilder private var label: some View {
+        let text = Text(symbol.title).font(.system(size:10)).fixedSize()
+        if symbol.rotation % 180 == 0 {
+            text.frame(height:0, alignment:.top)
+                .offset(y:bounds.height/2 + 3)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        } else {
+            text.frame(width:0, alignment:.leading)
+                .offset(x:bounds.width/2 + 6)
+                .allowsHitTesting(false).accessibilityHidden(true)
         }
     }
 

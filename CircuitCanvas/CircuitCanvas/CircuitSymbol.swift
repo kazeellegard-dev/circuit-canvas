@@ -45,7 +45,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     func body(at position: CGPoint, rotation: Int) -> CGRect {
         let vertical = !isBlock && rotation % 180 != 0
         let size = isBlock ? CGSize(width:150,height:64) :
-            CGSize(width:vertical ? 44 : 100,height:vertical ? 100 : 44)
+            CGSize(width:vertical ? 50 : 100,height:vertical ? 100 : 50)
         return CGRect(x:position.x-size.width/2,y:position.y-size.height/2,width:size.width,height:size.height)
     }
     func direction(for pin: Int, rotation: Int) -> WireRouting.Direction {
@@ -65,137 +65,109 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Shared vector construction space, rendered in a 100 × 44 canvas frame.
-/// The terminal axis is y=32. Text lives below it, without shifting the pins.
+/// Vector construction space: 100 × 50 with the terminal axis at y=25.
+/// The body is a 50 × 50 square at x=25...75; the leads reach the pins at x=0 / x=100.
 struct CircuitSymbolShape: Shape {
     let kind: SymbolKind
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        var terminals = Path()
-        var terminalEdges: (CGFloat, CGFloat)?
+        var leftEnd: CGFloat = 25, rightEnd: CGFloat = 75
         func line(_ points: [(CGFloat, CGFloat)]) {
             guard let first = points.first else { return }
             p.move(to: CGPoint(x: first.0, y: first.1))
             for point in points.dropFirst() { p.addLine(to: CGPoint(x: point.0, y: point.1)) }
         }
-        func bar(_ x: CGFloat, _ half: CGFloat) { line([(x,32-half),(x,32+half)]) }
-        func leads(_ left: CGFloat, _ right: CGFloat) { terminalEdges = (left,right) }
-        func circle() { p.addEllipse(in: CGRect(x:45,y:3,width:60,height:58)); leads(45,105) }
+        func bar(_ x: CGFloat, _ half: CGFloat) { line([(x,25-half),(x,25+half)]) }
+        func circle() { p.addEllipse(in: CGRect(x:25,y:0,width:50,height:50)) }
         func arrow(_ a: CGPoint, _ b: CGPoint) {
             line([(a.x,a.y),(b.x,b.y)])
             let angle = atan2(b.y-a.y,b.x-a.x)
-            line([(b.x-6*cos(angle-0.5),b.y-6*sin(angle-0.5)),(b.x,b.y),
-                  (b.x-6*cos(angle+0.5),b.y-6*sin(angle+0.5))])
+            line([(b.x-4*cos(angle-0.5),b.y-4*sin(angle-0.5)),(b.x,b.y),
+                  (b.x-4*cos(angle+0.5),b.y-4*sin(angle+0.5))])
         }
         switch kind {
         case .dc:
-            leads(69,81); bar(69,19); bar(81,10)
+            leftEnd = 42; rightEnd = 58; bar(42,18); bar(58,9)
         case .battery:
-            leads(57,93)
-            for x: CGFloat in [57,81] { bar(x,19); bar(x+12,10) }
-            line([(69,32),(81,32)])
+            leftEnd = 34; rightEnd = 66
+            bar(34,18); bar(42,9); bar(58,18); bar(66,9); line([(42,25),(58,25)])
         case .ac:
             circle()
-            p.move(to: CGPoint(x:61,y:32))
-            p.addCurve(to: CGPoint(x:75,y:32), control1: CGPoint(x:65,y:16), control2: CGPoint(x:71,y:16))
-            p.addCurve(to: CGPoint(x:89,y:32), control1: CGPoint(x:79,y:48), control2: CGPoint(x:85,y:48))
+            p.move(to: CGPoint(x:36,y:25))
+            p.addCurve(to: CGPoint(x:50,y:25), control1: CGPoint(x:40,y:11), control2: CGPoint(x:46,y:11))
+            p.addCurve(to: CGPoint(x:64,y:25), control1: CGPoint(x:54,y:39), control2: CGPoint(x:60,y:39))
         case .vcc:
-            terminalEdges = (42,108); line([(42,32),(88,32)]); bar(88,18)
+            leftEnd = 60; bar(60,16)
         case .ground:
-            terminalEdges = (42,108); bar(42,21); bar(58,14); bar(74,7)
+            leftEnd = 35; bar(35,20); bar(47,13); bar(59,6)
         case .resistor, .variableResistor:
-            leads(49,101)
-            line([(49,32),(54,22),(62,42),(70,22),(78,42),(86,22),(94,42),(101,32)])
-            if kind == .variableResistor { arrow(CGPoint(x:55,y:50),CGPoint(x:94,y:8)) }
+            line([(25,25),(31,11),(40,39),(50,11),(60,39),(69,11),(75,25)])
+            if kind == .variableResistor { arrow(CGPoint(x:32,y:44),CGPoint(x:68,y:6)) }
         case .capacitor, .polarizedCapacitor:
-            leads(69,81); bar(69,20); bar(81,20)
-
+            leftEnd = 43; rightEnd = 57; bar(43,15); bar(57,15)
         case .inductor:
-            leads(47,103)
-            p.move(to: CGPoint(x:47,y:32))
-            for x: CGFloat in [47,61,75,89] {
-                p.addCurve(to: CGPoint(x:x+14,y:32),control1: CGPoint(x:x,y:10),control2: CGPoint(x:x+14,y:10))
+            p.move(to: CGPoint(x:25,y:25))
+            for i in 0..<4 {
+                let x = 25 + CGFloat(i) * 12.5
+                p.addCurve(to: CGPoint(x:x+12.5,y:25),control1: CGPoint(x:x,y:5),control2: CGPoint(x:x+12.5,y:5))
             }
         case .diode, .led, .zener, .photodiode:
-            leads(59,kind == .zener ? 93 : 87)
-            line([(59,16),(87,32),(59,48),(59,16)])
-            if kind == .zener { line([(81,12),(87,16),(87,48),(93,52)]); line([(87,32),(93,32)]) }
-            else { bar(87,16) }
+            leftEnd = 30; rightEnd = 70
+            line([(30,10),(30,40),(70,25),(30,10)])
+            if kind == .zener { line([(76,40),(70,40),(70,10),(64,10)]) } else { bar(70,15) }
             if kind == .led || kind == .photodiode {
-                for x: CGFloat in [67,77] {
-                    let near = CGPoint(x:x,y:18), far = CGPoint(x:x+8,y:3)
+                for x: CGFloat in [44,54] {
+                    let near = CGPoint(x:x,y:11), far = CGPoint(x:x+7,y:1)
                     arrow(kind == .led ? near : far, kind == .led ? far : near)
                 }
             }
         case .switchOpen, .pushButton:
-            leads(50,100)
-            p.addEllipse(in: CGRect(x:50,y:29,width:6,height:6))
-            p.addEllipse(in: CGRect(x:94,y:29,width:6,height:6))
-            if kind == .switchOpen { line([(53,29),(92,12)]) }
-            else { line([(53,22),(97,22)]); line([(75,22),(75,9)]); line([(65,9),(85,9)]) }
+            p.addEllipse(in: CGRect(x:25,y:22,width:6,height:6))
+            p.addEllipse(in: CGRect(x:69,y:22,width:6,height:6))
+            if kind == .switchOpen { line([(30,24),(70,8)]) }
+            else { line([(30,17),(70,17)]); line([(50,17),(50,7)]); line([(40,7),(60,7)]) }
         case .fuse:
-            leads(51,99); p.addRect(CGRect(x:51,y:24,width:48,height:16)); line([(51,32),(99,32)])
+            p.addRect(CGRect(x:25,y:17,width:50,height:16)); line([(25,25),(75,25)])
         case .lamp:
-            circle(); line([(61,18),(89,46)]); line([(61,46),(89,18)])
-        case .motor:
-            circle()
-        case .voltmeter:
-            circle()
-        case .ammeter:
+            circle(); line([(36,11),(64,39)]); line([(36,39),(64,11)])
+        case .motor, .voltmeter, .ammeter:
             circle()
         case .speaker:
-            leads(53,97); p.addRect(CGRect(x:53,y:23,width:16,height:18))
-            line([(69,23),(97,12),(97,52),(69,41)])
+            p.addRect(CGRect(x:25,y:17,width:14,height:16))
+            line([(39,17),(75,4),(75,46),(39,33)])
         case .crystal:
-            leads(51,99); bar(51,18); bar(99,18); p.addRect(CGRect(x:61,y:15,width:28,height:34))
+            bar(25,15); bar(75,15); p.addRect(CGRect(x:37,y:12,width:26,height:26))
         default: break
         }
-        if let (left, right) = terminalEdges {
-            if kind.pinCount == 2 {
-                // Fit the body inside 44pt; leave 28pt external leads on each side.
-                let center = (left+right)/2
-                let factor = 66 / (right-left)
-                p = p.applying(CGAffineTransform(translationX:-center,y:0)
-                    .concatenating(CGAffineTransform(scaleX:factor,y:1))
-                    .concatenating(CGAffineTransform(translationX:75,y:0)))
-                let l = 75+(left-center)*factor, r = 75+(right-center)*factor
-                terminals.move(to:CGPoint(x:0,y:32)); terminals.addLine(to:CGPoint(x:l,y:32))
-                terminals.move(to:CGPoint(x:r,y:32)); terminals.addLine(to:CGPoint(x:150,y:32))
-            } else {
-                terminals.move(to:CGPoint(x:0,y:32)); terminals.addLine(to:CGPoint(x:42,y:32))
-            }
-            p.addPath(terminals)
-        }
-        return p.applying(CGAffineTransform(scaleX: rect.width/150, y: rect.height/64)
+        line([(0,25),(leftEnd,25)])
+        if kind.pinCount == 2 { line([(rightEnd,25),(100,25)]) }
+        return p.applying(CGAffineTransform(scaleX: rect.width/100, y: rect.height/50)
             .concatenating(CGAffineTransform(translationX: rect.minX,y: rect.minY)))
     }
 }
 
-/// Text is drawn separately so the internal letter stays upright.
+/// Text is drawn separately so the internal letter and polarity marks stay upright.
 struct CircuitGlyph: View {
     let kind: SymbolKind
     let rotation: Int
+    private func marker(_ text: String, _ dx: CGFloat, _ dy: CGFloat) -> some View {
+        let radians = Double(rotation) * .pi / 180
+        return Text(text).font(.system(size:10,weight:.bold))
+            .offset(x:dx*cos(radians)-dy*sin(radians), y:dx*sin(radians)+dy*cos(radians))
+    }
     var body: some View {
         ZStack {
             CircuitSymbolShape(kind: kind).stroke(.primary, lineWidth: 2)
-                .frame(width:100,height:44)
+                .frame(width:100,height:50)
                 .rotationEffect(.degrees(Double(rotation)))
-            if kind == .polarizedCapacitor {
-                Text("+").font(.system(size:10,weight:.bold))
-                    .offset(x:-17*cos(Double(rotation) * .pi/180)+14*sin(Double(rotation) * .pi/180),
-                            y:-17*sin(Double(rotation) * .pi/180)-14*cos(Double(rotation) * .pi/180))
+            switch kind {
+            case .polarizedCapacitor: marker("+",-15,-15)
+            case .dc: marker("+",-17,-14); marker("−",17,-12)
+            case .battery: marker("+",-25,-14); marker("−",25,-12)
+            default: EmptyView()
             }
-            if kind == .dc || kind == .battery {
-                ForEach(0..<2) { index in
-                    let sign: CGFloat = index == 0 ? -1 : 1
-                    let radians = Double(rotation) * .pi / 180
-                    Text(index == 0 ? "+" : "−").font(.system(size:10,weight:.bold))
-                        .offset(x:sign*17*cos(radians)+14*sin(radians),
-                                y:sign*17*sin(radians)-14*cos(radians))
-                }
-            }
-            if let letter = kind.letter { Text(letter).font(.system(size:18,weight:.medium)) }
+            if let letter = kind.letter { Text(letter).font(.system(size:16,weight:.medium)) }
         }
-        .frame(width:rotation % 180 == 0 ? 100 : 44,height:rotation % 180 == 0 ? 44 : 100)
+        .frame(width:rotation % 180 == 0 ? 100 : 50,height:rotation % 180 == 0 ? 50 : 100)
     }
 }

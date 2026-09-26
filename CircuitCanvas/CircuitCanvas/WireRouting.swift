@@ -43,7 +43,7 @@ enum WireRouting {
     static func routingBounds(_ bodies: [CGRect]) -> [CGRect] {
         bodies.map { body in
             var left: CGFloat = 24, right: CGFloat = 24
-            var top: CGFloat = body.width == 44 ? 24 : 20
+            var top: CGFloat = body.width == 50 ? 24 : 20
             var bottom = top
             for other in bodies where other != body {
                 if other.maxY > body.minY && other.minY < body.maxY {
@@ -95,12 +95,33 @@ enum WireRouting {
         return result.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
     }
 
+    /// A wire is never left undrawn: when the preferred route does not fit (symbols placed
+    /// close together), relax the margins, then the lead-out length, then the overlap rule,
+    /// and finally fall back to a plain orthogonal path.
     static func route(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]]) -> [CGPoint] {
-        let bounds = routingBounds(bodies)
+        let attempts: [(lead: CGFloat, margin: Bool, avoidOccupied: Bool)] = [
+            (24, true, true), (24, false, true), (12, false, true), (12, false, false)
+        ]
+        for attempt in attempts {
+            let path = plannedRoute(wire, bodies: bodies, occupied: attempt.avoidOccupied ? occupied : [],
+                                    leadLength: attempt.lead, margin: attempt.margin)
+            if !path.isEmpty { return path }
+        }
+        func stub(_ pin: CGPoint, _ direction: Direction?) -> CGPoint {
+            guard let v = direction?.vector else { return pin }
+            return CGPoint(x:pin.x+v.x*12,y:pin.y+v.y*12)
+        }
+        let s = stub(wire.start, wire.startDirection), e = stub(wire.end, wire.endDirection)
+        return simplify([wire.start, s, CGPoint(x:e.x,y:s.y), e, wire.end])
+    }
+
+    private static func plannedRoute(_ wire: Connection, bodies: [CGRect], occupied: [[CGPoint]],
+                                     leadLength: CGFloat, margin: Bool) -> [CGPoint] {
+        let bounds = margin ? routingBounds(bodies) : bodies
         func lead(_ pin: CGPoint, direction: Direction?) -> CGPoint {
             if let direction {
                 let v = direction.vector
-                return CGPoint(x:pin.x+v.x*24,y:pin.y+v.y*24)
+                return CGPoint(x:pin.x+v.x*leadLength,y:pin.y+v.y*leadLength)
             }
             for (i, body) in bodies.enumerated() {
                 if body.midY == pin.y {

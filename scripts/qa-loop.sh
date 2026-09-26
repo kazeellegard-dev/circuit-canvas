@@ -10,7 +10,8 @@
 #   CODEX_CMD    Codex の非対話コマンド        (既定: "codex exec -s workspace-write")
 #   CLAUDE_CMD   Claude Code の非対話コマンド  (既定: "claude -p")
 #   CLAUDE_ARGS  Claude Code に追加する引数     (既定: --allowedTools を最小限に設定)
-#   SIM_ID       テスト対象シミュレーターの UDID (既定: iPad Pro 11-inch (M5))
+#   SIM_ID       ゲート（xcodebuild test）用シミュレーターの UDID
+#                (既定: テスト専用の "iPad Pro 11-inch (M5) TEST"。画面確認用の iPad を、テストが再起動しないため)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,7 +20,7 @@ LOOP_DIR="$APP_DIR/docs/qa/loop"
 VERDICT="$LOOP_DIR/verdict.json"
 PROJECT="$APP_DIR/CircuitCanvas.xcodeproj"
 SCHEME="CircuitCanvas"
-SIM_ID="${SIM_ID:-839D27C2-04D6-43AF-BEAD-924C3E61401A}"
+SIM_ID="${SIM_ID:-8E4B0FE5-0E65-456A-9FC7-F399E3C87547}"
 CODEX_CMD="${CODEX_CMD:-codex exec -s workspace-write}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude -p}"
 CLAUDE_ARGS="${CLAUDE_ARGS:---allowedTools Bash,Read,Write,Glob,Grep,mcp__Claude_Code_iOS_Simulator__*}"
@@ -168,8 +169,8 @@ for ((i = 1; i <= MAX_ITER; i++)); do
   log "ゲート: xcodebuild test"
   GATE_LOG="$RUN_DIR/iter$i-gate.log"
   if [[ $DRY_RUN -eq 1 ]]; then
-    echo "  [dry-run] xcodebuild test -project ... -scheme $SCHEME -destination id=$SIM_ID"
-  elif ! xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" > "$GATE_LOG" 2>&1; then
+    echo "  [dry-run] xcodebuild test -project ... -scheme $SCHEME -destination id=$SIM_ID -parallel-testing-enabled NO"
+  elif ! xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" -parallel-testing-enabled NO > "$GATE_LOG" 2>&1; then
     log "ゲート失敗 → Codex へ戻す"
     write_gate_failure_verdict "$GATE_LOG"
     continue
