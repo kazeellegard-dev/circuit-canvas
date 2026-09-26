@@ -282,10 +282,10 @@ final class CircuitCanvasUITests: XCTestCase {
             if angle.exists {
                 let rotation = Int(angle.value as? String ?? "0") ?? 0
                 switch rotation {
-                case 90: return CGRect(x:xy[0]-22,y:xy[1],width:44,height:100)
-                case 180: return CGRect(x:xy[0]-100,y:xy[1]-22,width:100,height:44)
-                case 270: return CGRect(x:xy[0]-22,y:xy[1]-100,width:44,height:100)
-                default: return CGRect(x:xy[0],y:xy[1]-22,width:100,height:44)
+                case 90: return CGRect(x:xy[0]-25,y:xy[1],width:50,height:100)
+                case 180: return CGRect(x:xy[0]-100,y:xy[1]-25,width:100,height:50)
+                case 270: return CGRect(x:xy[0]-25,y:xy[1]-100,width:50,height:100)
+                default: return CGRect(x:xy[0],y:xy[1]-25,width:100,height:50)
                 }
             }
             return CGRect(x:xy[0],y:xy[1]-32,width:150,height:64)
