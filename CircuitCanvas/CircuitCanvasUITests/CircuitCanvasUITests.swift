@@ -276,23 +276,51 @@ final class CircuitCanvasUITests: XCTestCase {
             let v = viewport(), o = offsetAndScale()
             return CGPoint(x: (v[0]/2 - o.x)/o.scale, y: (v[1]/2 - o.y)/o.scale)
         }
-        // Pan (in two steps, each a safe on-screen distance) far enough that boundedCanvasOffset's 200pt edge
-        // margin is already in play for a plain pan - exactly the situation the fixed setZoom(_:) must not
-        // disturb (Codex major, 4E round 1).
+        // Pan (in several safe-sized steps, each a fresh gesture from the same screen point, so their
+        // translations accumulate) far enough that this necessarily reaches boundedCanvasOffset's 200pt edge
+        // margin - exactly the situation the fixed setZoom(_:) must not disturb (Codex major, 4E round 1).
         let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:291,dy:473))
-        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:300,dy:200)))
-        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:300,dy:200)))
+        for _ in 0..<3 { source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:400,dy:300))) }
+        // Confirm the pan actually happened, and landed exactly on the edge margin - not just "somewhere
+        // panned" - so this test is known to exercise the bug, not merely fail to disprove it (Codex minor,
+        // 4E round 2).
+        let v = viewport(), afterPan = offsetAndScale()
+        XCTAssertEqual(afterPan.x,v[0]-200,accuracy:2,"the pan must have reached boundedCanvasOffset's edge")
+        XCTAssertEqual(afterPan.y,v[1]-200,accuracy:2)
         let before = canvasCenter()
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-200"].tap()
+        XCTAssertEqual(offsetAndScale().scale,2,accuracy:0.0001,"the selection itself must have taken effect")
         XCTAssertEqual(canvasCenter().x,before.x,accuracy:1,"zooming must not move the point that was centered")
         XCTAssertEqual(canvasCenter().y,before.y,accuracy:1)
         // And back down, from a now-panned, zoomed-in state.
         let midway = canvasCenter()
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-50"].tap()
+        XCTAssertEqual(offsetAndScale().scale,0.5,accuracy:0.0001)
         XCTAssertEqual(canvasCenter().x,midway.x,accuracy:1)
         XCTAssertEqual(canvasCenter().y,midway.y,accuracy:1)
+    }
+
+    @MainActor
+    func testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale() throws {
+        let app = XCUIApplication(); app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
+        canvas.pinch(withScale:0.73,velocity:-1)
+        // XCUITest's synthetic pinch is unreliable in this harness (see the note on
+        // testOperationHintStaysFixedDuringZoomAndPan): confirmed again here, precisely, via the exact scale -
+        // it has been observed to leave canvasScale completely untouched rather than raising a
+        // MagnificationGesture at all. There is no other in-app way to reach a non-preset scale to test from
+        // (the menu itself only ever sets exact presets), so when that happens, skip rather than fail on an
+        // environment limitation the production code has no part in.
+        guard abs(exactScale() - 1) > 0.001 else {
+            throw XCTSkip("XCUITest's pinch did not change canvasScale in this environment (known harness limitation) - nothing to test the menu selection against.")
+        }
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-100"].tap()
+        XCTAssertEqual(exactScale(),1,accuracy:0.0001)
     }
 
     @MainActor
