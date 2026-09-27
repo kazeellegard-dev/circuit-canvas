@@ -179,9 +179,14 @@ final class CircuitCanvasUITests: XCTestCase {
 
         // Resizing the note must also move the near end (still to the same corner) without touching the anchor.
         XCTAssertTrue(element(app,"experiment-note-R12を変更-resize-br").waitForExistence(timeout:2))
+        let sizeBeforeResize = size(), startBeforeResize = relateStart()
         let handle = element(app,"experiment-note-R12を変更-resize-br")
         let handleStart = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         handleStart.press(forDuration:0.05,thenDragTo:handleStart.withOffset(CGVector(dx:40,dy:40)))
+        // The resize must actually have happened (br grows the note; the top-trailing X moves right with it) -
+        // not just that the invariant checks below would also pass on an unchanged size (Codex minor, round 2).
+        XCTAssertGreaterThan(size()[0],sizeBeforeResize[0],"br must have grown the note")
+        XCTAssertGreaterThan(relateStart()[0],startBeforeResize[0],"the near end's X must move right with the growing top-trailing corner")
         XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"370,250,topTrailing","the target end must stay fixed when the note resizes")
         XCTAssertEqual(relateStart()[0],expectedTopTrailing()[0],accuracy:1,"the near end must follow the resize")
         XCTAssertEqual(relateStart()[1],expectedTopTrailing()[1],accuracy:1)
