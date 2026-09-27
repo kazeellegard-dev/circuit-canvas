@@ -107,8 +107,12 @@ else
     }
     run_gate
     # ランナーが起動できなかった（テストが 1 件も走っていない）ときだけ、もう 1 回やり直す。
-    if [[ $GATE_EXIT -ne 0 ]] && grep -q "Failed to install or launch the test runner" "$RUN_DIR/gate.log"; then
-      log "テストランナーの起動に失敗したため、端末を再起動して、ゲートをやり直します"
+    if [[ $GATE_EXIT -ne 0 ]] && grep -q "Failed to install or launch the test runner" "$RUN_DIR/gate.log" \
+        && ! grep -q "^Test Case '" "$RUN_DIR/gate.log"; then
+      log "テストランナーの起動に失敗したため（テストは 0 件）、端末を再起動して、ゲートをやり直します"
+      # 1 回目のログと結果は、残しておく。
+      mv "$RUN_DIR/gate.log" "$RUN_DIR/gate-attempt1.log"
+      [[ -d "$GATE_XCRESULT" ]] && mv "$GATE_XCRESULT" "$RUN_DIR/gate-attempt1.xcresult"
       xcrun simctl shutdown "$SIM_ID" >/dev/null 2>&1 || true
       sleep 5
       run_gate
