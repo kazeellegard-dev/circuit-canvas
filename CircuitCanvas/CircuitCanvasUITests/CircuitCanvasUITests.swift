@@ -141,24 +141,67 @@ final class CircuitCanvasUITests: XCTestCase {
         let relate = element(app,"experiment-note-R12を変更-relate")
         XCTAssertTrue(relate.waitForExistence(timeout:2))
         relate.tap()
+        // Step 1 (4A): pick which corner the line starts from - replaces the resize handles while picking.
+        XCTAssertTrue(app.staticTexts["関連付ける角をタップ"].exists)
+        XCTAssertFalse(element(app,"experiment-note-R12を変更-resize-tl").exists)
+        let topTrailing = element(app,"experiment-note-R12を変更-relate-corner-topTrailing")
+        XCTAssertTrue(topTrailing.waitForExistence(timeout:2))
+        topTrailing.tap()
+        // Step 2: tap the target, same as before.
         XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists)
         let target = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:400))
         target.tap()
         XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
-        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400")
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400,topTrailing")
 
-        // The long-press context menu route (S5) still works, independently of the canvas button.
+        // Moving the note afterwards must not move the target (far) end of the line - only the note-side end,
+        // which is derived from the note's own bounds, follows.
+        let start = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:30,dy:20)))
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400,topTrailing","the target end must stay fixed when the note moves")
+
+        // The long-press context menu route (S5) still works, independently of the canvas button, and goes
+        // through the same corner-pick step.
         note.press(forDuration:0.6)
         app.buttons["関連付け"].tap()
+        let bottomLeading = element(app,"experiment-note-R12を変更-relate-corner-bottomLeading")
+        XCTAssertTrue(bottomLeading.waitForExistence(timeout:2))
+        bottomLeading.tap()
         XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists)
         let secondTarget = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:500,dy:600))
         secondTarget.tap()
-        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"500,600")
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"500,600,bottomLeading")
 
         // The button's low-zoom sizing (>= 32pt on screen, per Codex review) is covered by a unit test on the
         // underlying formula (ResizableGeometry.screenConstant): a live pinch here could not be trusted to reliably
         // change the reported scale in this harness - it sometimes registered as a plain pan instead - so a
         // hard assertion on it would either be flaky or silently prove nothing.
+    }
+
+    @MainActor
+    func testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        // The initial note's icon matches its type (改造), same convention as a block's default icon.
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-icon").value as? String,"wrench.and.screwdriver.fill")
+        note.tap()
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.staticTexts["付箋"].waitForExistence(timeout:2))
+        XCTAssertFalse(app.staticTexts["実験メモ"].exists)
+        app.buttons["note-type-picker"].tap()
+        XCTAssertTrue(app.buttons["メモ"].waitForExistence(timeout:2))
+        app.buttons["メモ"].tap()
+        XCTAssertTrue(app.buttons["inspector-note-icon-picker"].waitForExistence(timeout:2))
+        app.buttons["inspector-note-icon-picker"].tap()
+        XCTAssertTrue(app.staticTexts["アイコンを選択"].waitForExistence(timeout:2))
+        // Still shows the icon for the type the note started with (改造), not the newly selected メモ - the
+        // icon only changes when the user actually picks one.
+        XCTAssertTrue(app.buttons["icon-picker-wrench.and.screwdriver.fill"].isSelected)
+        app.buttons["icon-picker-note.text"].tap()
+        XCTAssertTrue(app.buttons["inspector-note-icon-picker"].waitForExistence(timeout:2))
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-icon").value as? String,"note.text")
     }
 
     @MainActor
@@ -185,7 +228,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(note.waitForExistence(timeout: 3))
         note.tap()
         app.buttons["確認"].tap()
-        app.buttons["メモを削除"].tap()
+        app.buttons["付箋を削除"].tap()
 
         XCTAssertFalse(note.waitForExistence(timeout: 1))
         XCTAssertTrue(app.staticTexts["図面"].waitForExistence(timeout: 2))

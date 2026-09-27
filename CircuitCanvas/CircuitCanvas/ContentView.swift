@@ -30,7 +30,44 @@ private enum NoteSize {
     }
 }
 private enum Tool { case select, symbol, note, wire }
-private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
+private enum NoteType: String, CaseIterable, Identifiable {
+    case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
+    var id: Self { self }
+    /// The icon associated with this type; also the default icon a newly created note starts with.
+    var icon: String {
+        switch self {
+        case .modification: "wrench.and.screwdriver.fill"
+        case .measurement: "waveform"
+        case .confirmation: "checkmark.seal.fill"
+        case .unresolved: "exclamationmark.triangle.fill"
+        case .caution: "exclamationmark.circle.fill"
+        case .memo: "note.text"
+        }
+    }
+}
+/// Categorised SF Symbols for a note's icon: one per NoteType (6, memo included) plus a few generic ones,
+/// for ~10 total - mirrors BlockIcon's grouping, reused by the same IconPickerView.
+private enum NoteIcon {
+    static let categories: [(name: String, icons: [String])] = [
+        ("種別のアイコン", NoteType.allCases.map(\.icon)),
+        ("その他", ["tag.fill", "flag.fill", "star.fill", "pin.fill"])
+    ]
+}
+/// The corner of a note that a relate line starts from - tapped explicitly (like choosing a wire's pin),
+/// rather than always the note's center. Follows the note's bounds, so only the note-side end moves when
+/// the note is dragged; the far end (the note's `anchor`) is a fixed canvas point that never moves.
+private enum NoteCorner: String, CaseIterable, Identifiable {
+    case topLeading, topTrailing, bottomLeading, bottomTrailing
+    var id: Self { self }
+    func point(in bounds: CGRect) -> CGPoint {
+        switch self {
+        case .topLeading: CGPoint(x: bounds.minX, y: bounds.minY)
+        case .topTrailing: CGPoint(x: bounds.maxX, y: bounds.minY)
+        case .bottomLeading: CGPoint(x: bounds.minX, y: bounds.maxY)
+        case .bottomTrailing: CGPoint(x: bounds.maxX, y: bounds.maxY)
+        }
+    }
+}
 private struct SymbolItem: Identifiable {
     let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize
     var icon: String   // Stored (not derived from kind): the user can change a block's icon after placing it.
@@ -42,7 +79,15 @@ private struct SymbolItem: Identifiable {
         self.blockPins = SymbolKind.defaultBlockPins
     }
 }
-private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint?; var size: CGSize = NoteSize.standard }
+private struct NoteItem: Identifiable {
+    let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint
+    var complete = false; var anchor: CGPoint?; var relateCorner: NoteCorner = .topLeading; var size: CGSize = NoteSize.standard
+    var icon: String
+    init(type: NoteType = .modification, title: String, body: String, position: CGPoint, anchor: CGPoint? = nil, icon: String? = nil) {
+        self.type = type; self.title = title; self.body = body; self.position = position; self.anchor = anchor
+        self.icon = icon ?? type.icon
+    }
+}
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
 struct ContentView: View {
@@ -52,7 +97,8 @@ struct ContentView: View {
     @State private var selectedCategory: SymbolCategory = .block
     @State private var selectedSymbol: UUID?
     @State private var selectedNote: UUID?
-    @State private var linkingNote: UUID?
+    @State private var linkingNote: UUID?   // relate button pressed: waiting for a corner tap on this note
+    @State private var pendingRelateFrom: (id: UUID, corner: NoteCorner)?   // corner tapped: waiting for the target tap
     @State private var pendingWireStart: CGPoint?
     @State private var dragOrigins: [UUID: CGPoint] = [:]
     @State private var noteDragOrigins: [UUID: CGPoint] = [:]
@@ -101,8 +147,8 @@ struct ContentView: View {
             .onAppear { reroute() }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil }
-                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil }
+                    Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
+                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
                     Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol }
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
                     Button("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right") { resetCanvasViewport() }
@@ -173,7 +219,8 @@ struct ContentView: View {
             .clipped()
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
-                    if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
+                    if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付ける角をタップ") }
+                    else if pendingRelateFrom != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
                     else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
                     else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary.rawValue)を配置") }
                     else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
@@ -200,7 +247,13 @@ struct ContentView: View {
         ZStack(alignment: .topLeading) {
                 Grid().allowsHitTesting(false)
                 Canvas { context, _ in
-                    for note in notes { if let anchor = note.anchor { var path = Path(); path.move(to: note.position); path.addLine(to: anchor); context.stroke(path, with: .color(.secondary), style: .init(lineWidth: 1, dash: [4, 4])) } }
+                    for note in notes {
+                        if let anchor = note.anchor {
+                            let bounds = CGRect(x: note.position.x-note.size.width/2, y: note.position.y-note.size.height/2, width: note.size.width, height: note.size.height)
+                            var path = Path(); path.move(to: note.relateCorner.point(in: bounds)); path.addLine(to: anchor)
+                            context.stroke(path, with: .color(.secondary), style: .init(lineWidth: 1, dash: [4, 4]))
+                        }
+                    }
                     for (index, wire) in wires.enumerated() {
                         let hops = wireHops(index)
                         context.stroke(wirePath(wire.points, hops: hops), with: .color(.primary), lineWidth: 2)
@@ -346,38 +399,57 @@ struct ContentView: View {
                                 .onChanged { value in move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
                         )
-                        .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { linkingNote = note.id } }
+                        .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; linkingNote = note.id } }
                 }
                 if let id = selectedNote, let note = notes.first(where: { $0.id == id }) {
                     let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
-                    let k = max(1, 1 / canvasScale)
-                    ForEach(ResizeCorner.allCases) { corner in
-                        let hit = NoteSize.handleRect(body: bounds, sx: corner.sx, sy: corner.sy, scale: canvasScale)
-                        Color.clear.frame(width:hit.width,height:hit.height)
-                            .overlay { Circle().fill(Color.accentColor).frame(width:10*k,height:10*k)
-                                .offset(x:-corner.sx*6*k,y:-corner.sy*10*k) }
-                            .contentShape(Rectangle())
-                            .position(x:hit.midX, y:hit.midY)
-                            .accessibilityElement().accessibilityLabel("大きさを変更")
-                            .accessibilityIdentifier("experiment-note-\(note.title)-resize-\(corner.rawValue)")
-                            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))
-                                .onChanged { value in resizeNote(noteID: id, corner: corner, translation: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
-                                .onEnded { _ in noteResizeDrag = nil })
+                    if linkingNote == id {
+                        // Relate mode, step 1: pick which corner the line starts from (like tapping a wire's
+                        // starting pin). Replaces the resize handles/relate button for this note until picked.
+                        let pickSide = ResizableGeometry.screenConstant(32, scale: canvasScale)
+                        ForEach(NoteCorner.allCases) { corner in
+                            let point = corner.point(in: bounds)
+                            Button { pendingRelateFrom = (id, corner); linkingNote = nil } label: {
+                                Image(systemName: "smallcircle.filled.circle")
+                                    .frame(width: pickSide, height: pickSide)
+                                    .background(.regularMaterial, in: Circle())
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .position(point)
+                            .accessibilityLabel("この角から関連付け")
+                            .accessibilityIdentifier("experiment-note-\(note.title)-relate-corner-\(corner.rawValue)")
+                        }
+                    } else {
+                        let k = max(1, 1 / canvasScale)
+                        ForEach(ResizeCorner.allCases) { corner in
+                            let hit = NoteSize.handleRect(body: bounds, sx: corner.sx, sy: corner.sy, scale: canvasScale)
+                            Color.clear.frame(width:hit.width,height:hit.height)
+                                .overlay { Circle().fill(Color.accentColor).frame(width:10*k,height:10*k)
+                                    .offset(x:-corner.sx*6*k,y:-corner.sy*10*k) }
+                                .contentShape(Rectangle())
+                                .position(x:hit.midX, y:hit.midY)
+                                .accessibilityElement().accessibilityLabel("大きさを変更")
+                                .accessibilityIdentifier("experiment-note-\(note.title)-resize-\(corner.rawValue)")
+                                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))
+                                    .onChanged { value in resizeNote(noteID: id, corner: corner, translation: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
+                                    .onEnded { _ in noteResizeDrag = nil })
+                        }
+                        // Same idea as the circuit-symbol rotate button: an action, next to the selected item, that
+                        // needs no trip through the inspector sheet (which would then block tapping the canvas below it).
+                        let relateSide = ResizableGeometry.screenConstant(32, scale: canvasScale)
+                        let relateArm = ResizableGeometry.screenConstant(24, scale: canvasScale)
+                        Button { linkingNote = id } label: {
+                            Image(systemName:"arrowshape.turn.up.right")
+                                .frame(width:relateSide,height:relateSide)
+                                .background(.regularMaterial,in:Circle())
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(x:bounds.midX,y:bounds.minY-relateArm)
+                        .accessibilityLabel("付箋を関連付け")
+                        .accessibilityIdentifier("experiment-note-\(note.title)-relate")
                     }
-                    // Same idea as the circuit-symbol rotate button: an action, next to the selected item, that
-                    // needs no trip through the inspector sheet (which would then block tapping the canvas below it).
-                    let relateSide = ResizableGeometry.screenConstant(32, scale: canvasScale)
-                    let relateArm = ResizableGeometry.screenConstant(24, scale: canvasScale)
-                    Button { linkingNote = id } label: {
-                        Image(systemName:"arrowshape.turn.up.right")
-                            .frame(width:relateSide,height:relateSide)
-                            .background(.regularMaterial,in:Circle())
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .position(x:bounds.midX,y:bounds.minY-relateArm)
-                    .accessibilityLabel("付箋を関連付け")
-                    .accessibilityIdentifier("experiment-note-\(note.title)-relate")
                 }
 
             }
@@ -386,7 +458,7 @@ struct ContentView: View {
     private var canvasTapGesture: some Gesture {
         SpatialTapGesture(coordinateSpace: .named("editorViewport")).onEnded { tap in
                 let point = canvasPoint(from: tap.location)
-                if let id = linkingNote { setAnchor(id, point); linkingNote = nil }
+                if let pending = pendingRelateFrom { setAnchor(pending.id, point, corner: pending.corner); pendingRelateFrom = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
@@ -406,7 +478,7 @@ struct ContentView: View {
                         .accessibilityIdentifier("symbol-connection-status")
                         .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                     if symbol.wrappedValue.kind.isBlock {
-                        NavigationLink { IconPickerView(icon: symbol.icon) } label: {
+                        NavigationLink { IconPickerView(icon: symbol.icon, categories: BlockIcon.categories) } label: {
                             LabeledContent("アイコン") { Image(systemName: symbol.wrappedValue.icon) }
                         }
                         .accessibilityIdentifier("inspector-icon-picker")
@@ -426,12 +498,18 @@ struct ContentView: View {
                     }
                 }
             } else if let id = selectedNote, let note = noteBinding(for: id) {
-                Section("実験メモ") {
+                Section("付箋") {
                     Picker("種別", selection: note.type) { ForEach(NoteType.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("note-type-picker")
+                    NavigationLink { IconPickerView(icon: note.icon, categories: NoteIcon.categories) } label: {
+                        LabeledContent("アイコン") { Image(systemName: note.wrappedValue.icon) }
+                    }
+                    .accessibilityIdentifier("inspector-note-icon-picker")
                     TextField("タイトル", text: note.title)
                     TextField("本文", text: note.body, axis: .vertical)
                     Toggle("完了", isOn: note.complete)
-                    Button("メモを削除", role: .destructive) {
+                    Button("付箋を削除", role: .destructive) {
                         removeNote(id)
                     }
                 }
@@ -448,7 +526,10 @@ struct ContentView: View {
         }.formStyle(.grouped)
     }
 
-    private func setAnchor(_ id: UUID, _ point: CGPoint) { guard let i = notes.firstIndex(where: { $0.id == id }) else { return }; notes[i].anchor = point }
+    private func setAnchor(_ id: UUID, _ point: CGPoint, corner: NoteCorner) {
+        guard let i = notes.firstIndex(where: { $0.id == id }) else { return }
+        notes[i].anchor = point; notes[i].relateCorner = corner
+    }
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
             guard start.distance(to: pin) >= 1 else { return }
@@ -545,6 +626,7 @@ struct ContentView: View {
     private func removeNote(_ id: UUID) {
         selectedNote = nil
         linkingNote = nil
+        if pendingRelateFrom?.id == id { pendingRelateFrom = nil }
         notes.removeAll { $0.id == id }
     }
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
@@ -832,7 +914,7 @@ private struct NoteCard: View {
         // `.topLeading` on the frame below anchors this (possibly shorter than the frame) stack at the top,
         // so there is no need for a trailing Spacer - which would only eat into the room the body text has.
         VStack(alignment: .leading, spacing: 4) {
-            HStack { Image(systemName: note.complete ? "checkmark.circle.fill" : "wrench.and.screwdriver"); Text(note.type.rawValue); Spacer() }.font(.caption.weight(.medium))
+            HStack { Image(systemName: note.complete ? "checkmark.circle.fill" : note.icon); Text(note.type.rawValue); Spacer() }.font(.caption.weight(.medium))
             Text(note.title).font(.subheadline.weight(.semibold)).lineLimit(2)
             Text(note.body).font(.caption)
         }
@@ -856,7 +938,13 @@ private struct NoteCard: View {
                 .allowsHitTesting(false)
             Text("anchor").font(.system(size:1)).opacity(0.01)
                 .accessibilityIdentifier("experiment-note-\(note.title)-anchor")
-                .accessibilityValue(note.anchor.map { "\(Int($0.x)),\(Int($0.y))" } ?? "")
+                .accessibilityValue(note.anchor.map { "\(Int($0.x)),\(Int($0.y)),\(note.relateCorner.rawValue)" } ?? "")
+                .allowsHitTesting(false)
+            // Mirrors the block's `-icon` hidden text: Image(systemName:) is not reliably queryable once
+            // nested inside a .accessibilityElement(children:) group.
+            Text("icon").font(.system(size:1)).opacity(0.01)
+                .accessibilityIdentifier("experiment-note-\(note.title)-icon")
+                .accessibilityValue(note.icon)
                 .allowsHitTesting(false)
         }
     }
@@ -864,14 +952,16 @@ private struct NoteCard: View {
 
 private struct Grid: View { var body: some View { Canvas { context, size in var path = Path(); for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }; for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }; context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1) } } }
 
-/// Categorised SF Symbols grid (BlockIcon.categories) for choosing a block's icon; pushed from the inspector.
+/// Categorised SF Symbols grid for choosing an icon (BlockIcon.categories for a block, NoteIcon.categories
+/// for a note); pushed from the inspector.
 private struct IconPickerView: View {
     @Binding var icon: String
+    let categories: [(name: String, icons: [String])]
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                ForEach(BlockIcon.categories, id: \.name) { category in
+                ForEach(categories, id: \.name) { category in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(category.name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 12)], spacing: 12) {
