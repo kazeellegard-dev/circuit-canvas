@@ -415,7 +415,7 @@ struct ContentView: View {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
                                 // Same top-left corner, standard size (but never shorter than an added pin needs).
                                 let body = symbols[i].kind.body(at:symbols[i].position,rotation:0,size:symbols[i].size)
-                                let standard = CGSize(width: BlockSize.standard.width, height: max(BlockSize.standard.height, minimumBlockHeight(for: symbols[i])))
+                                let standard = CGSize(width: BlockSize.standard.width, height: max(BlockSize.standard.height, BlockSize.minimumHeight(for: symbols[i].blockPins)))
                                 applyBlockGeometry(i, center: CGPoint(x:body.minX+standard.width/2,y:body.minY+standard.height/2), size: standard)
                             }
                         }
@@ -510,16 +510,11 @@ struct ContentView: View {
               !symbols[i].blockPins.contains(pin) else { return }
         symbols[i].blockPins.append(pin)
     }
-    /// A block cannot shrink shorter than the row its highest added pin sits on - that pin has nowhere else to go
-    /// (pins are not removed by resizing; only added).
-    private func minimumBlockHeight(for symbol: SymbolItem) -> CGFloat {
-        max(BlockSize.minimum.height, 30 * CGFloat((symbol.blockPins.map(\.slot).max() ?? 0) + 1))
-    }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
         let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
         resizeDrag = origin
-        let minimum = CGSize(width: BlockSize.minimum.width, height: minimumBlockHeight(for: symbols[i]))
+        let minimum = CGSize(width: BlockSize.minimum.width, height: BlockSize.minimumHeight(for: symbols[i].blockPins))
         let result = ResizableGeometry.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy,
                                                translation: translation, step: BlockSize.step, minimum: minimum, maximum: BlockSize.maximum)
         applyBlockGeometry(i, center: result.center, size: result.size)

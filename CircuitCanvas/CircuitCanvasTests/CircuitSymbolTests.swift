@@ -360,10 +360,9 @@ struct CircuitSymbolTests {
     // MARK: minimum block height respects added pins
 
     @Test func minimumBlockHeightGrowsWithTheDeepestAddedPin() {
-        // Mirrors ContentView.minimumBlockHeight: 30 * (max slot + 1), never below the standard minimum.
-        func minimumHeight(_ pins: [SymbolKind.BlockPin]) -> CGFloat { max(30, 30 * CGFloat((pins.map(\.slot).max() ?? 0) + 1)) }
-        #expect(minimumHeight(SymbolKind.defaultBlockPins) == 30)
-        #expect(minimumHeight(SymbolKind.defaultBlockPins + [.init(side:.left,slot:2)]) == 90)
-        #expect(minimumHeight(SymbolKind.defaultBlockPins + [.init(side:.right,slot:1)]) == 60)
+        #expect(BlockSize.minimumHeight(for: SymbolKind.defaultBlockPins) == 30)
+        #expect(BlockSize.minimumHeight(for: SymbolKind.defaultBlockPins + [.init(side:.left,slot:2)]) == 90)
+        #expect(BlockSize.minimumHeight(for: SymbolKind.defaultBlockPins + [.init(side:.right,slot:1)]) == 60)
+        #expect(BlockSize.minimumHeight(for: []) == BlockSize.minimum.height,"an empty pin list still respects the standard minimum")
     }
 }

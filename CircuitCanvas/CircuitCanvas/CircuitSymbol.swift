@@ -61,6 +61,11 @@ enum BlockSize {
     static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
         ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
     }
+    /// The shortest a block may be: its own minimum, or - if it has pins added below the standard row - just tall
+    /// enough that its deepest pin still sits on the body (pins are not removed by resizing, only added).
+    static func minimumHeight(for pins: [SymbolKind.BlockPin]) -> CGFloat {
+        max(minimum.height, step * CGFloat((pins.map(\.slot).max() ?? 0) + 1))
+    }
 }
 
 enum SymbolKind: String, CaseIterable, Identifiable {

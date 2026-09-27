@@ -846,6 +846,20 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(Array(coordinates(element(app,"wire-3")).prefix(2)),coordinates(app.buttons["symbol-汎用ブロック-pin-2"]))
         assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
 
+        // "元の大きさに戻す" (reset) is the other path to a smaller size: it must respect the same minimum, not just
+        // the drag path already checked above.
+        app.buttons["確認"].tap()
+        app.buttons["元の大きさに戻す"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertEqual((element(app,"symbol-汎用ブロック-size").value as? String ?? ""),"90,120","reset must not shrink below the deepest added pin's row either")
+        let resetLeftX = coordinates(app.buttons["symbol-汎用ブロック-pin-0"])[0]
+        let resetTopY = coordinates(app.buttons["symbol-汎用ブロック-pin-0"])[1]
+        for row in 0...3 {
+            XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-\(row*2)"]),[resetLeftX,resetTopY+CGFloat(row)*30],"reset row \(row) left")
+        }
+        XCTAssertEqual(Array(coordinates(element(app,"wire-3")).prefix(2)),coordinates(app.buttons["symbol-汎用ブロック-pin-2"]),"the wire must still follow pin-2 after the reset")
+        assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
+
         // N6: deleting a block with an added, wired pin removes that wire too, like any other symbol deletion.
         app.buttons["確認"].tap()
         app.buttons["シンボルを削除"].tap()
