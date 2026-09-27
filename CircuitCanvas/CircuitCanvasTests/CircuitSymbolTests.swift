@@ -287,4 +287,35 @@ struct CircuitSymbolTests {
         #expect(ResizableGeometry.screenConstant(32, scale: 2) == 32)     // zoomed in: never smaller than the base
         #expect(ResizableGeometry.screenConstant(24, scale: 0.5) == 48)
     }
+
+    // MARK: block pin addition (3C)
+
+    @Test func blockPinSlotsCoverOneLeftAndRightPerThirtyPointRow() {
+        #expect(SymbolKind.blockPinSlots(height:30) == [.init(side:.left,slot:0),.init(side:.right,slot:0)])
+        #expect(SymbolKind.blockPinSlots(height:90) == [.init(side:.left,slot:0),.init(side:.right,slot:0),
+                                                         .init(side:.left,slot:1),.init(side:.right,slot:1),
+                                                         .init(side:.left,slot:2),.init(side:.right,slot:2)])
+        #expect(SymbolKind.defaultBlockPins == [.init(side:.left,slot:0),.init(side:.right,slot:0)])
+    }
+
+    @Test func addedBlockPinsSitOnTheirRowAndLeadOutward() {
+        let center = CGPoint(x:400,y:300)
+        let pins: [SymbolKind.BlockPin] = [.init(side:.left,slot:0),.init(side:.right,slot:0),
+                                            .init(side:.left,slot:1),.init(side:.right,slot:2)]
+        let size = CGSize(width:90,height:90)   // 3 rows
+        let positions = SymbolKind.block.pins(at:center,size:size,blockPins:pins)
+        let body = SymbolKind.block.body(at:center,rotation:0,size:size)
+        #expect(positions[0] == CGPoint(x:body.minX,y:body.minY+15))
+        #expect(positions[1] == CGPoint(x:body.maxX,y:body.minY+15))
+        #expect(positions[2] == CGPoint(x:body.minX,y:body.minY+45))     // row 1
+        #expect(positions[3] == CGPoint(x:body.maxX,y:body.minY+75))     // row 2
+        for (index,pin) in pins.enumerated() {
+            #expect(SymbolKind.block.direction(for:index,rotation:0,blockPins:pins) == pin.direction)
+        }
+        // Every added pin sits on the body edge and is at least 30pt from every other pin (Codex-review pattern
+        // from the multi-terminal task: adjacent pins must not share a tap target).
+        for i in positions.indices { for j in positions.indices where j > i {
+            #expect(hypot(positions[i].x-positions[j].x,positions[i].y-positions[j].y) >= 30)
+        } }
+    }
 }

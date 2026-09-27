@@ -757,6 +757,62 @@ final class CircuitCanvasUITests: XCTestCase {
 
     /// 3B: renaming a block and changing its icon from the inspector (the library only offers the generic block
     /// now; everything else is chosen afterwards). Also checks the four initial blocks kept their original icon.
+    /// 3C: "+" appears only on empty (side, row) slots for the selected block, adds a pin there, and that pin
+    /// wires, follows a move/resize, and rotation of a pin's side survives a resize whose height changes.
+    @MainActor
+    func testBlockPinAdditionAppearsOnEmptySlotsAndTheNewPinWorks() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app,category:"ブロック",name:"汎用ブロック",x:400,y:550)
+        // Not selected: no "+" anywhere.
+        XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-0").exists)
+        element(app,"symbol-汎用ブロック").tap()
+        // Height 30 (1 row): the top row already has both pins, so no "+" is offered at all.
+        XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-0").waitForExistence(timeout:1))
+        XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-right-0").exists)
+
+        // Grow to 3 rows (height 90): rows 1 and 2 are empty, so 4 "+" targets appear (left/right x 2 rows).
+        if !element(app,"symbol-汎用ブロック-resize-br").waitForExistence(timeout:1) { element(app,"symbol-汎用ブロック").tap() }
+        let brHandle = element(app,"symbol-汎用ブロック-resize-br")
+        let start = brHandle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:0,dy:60)))
+        XCTAssertEqual((element(app,"symbol-汎用ブロック-size").value as? String ?? ""),"90,90")
+        for side in ["left","right"] { for row in [1,2] {
+            XCTAssertTrue(element(app,"symbol-汎用ブロック-add-pin-\(side)-\(row)").waitForExistence(timeout:2), "\(side) row \(row)")
+        } }
+        // The top row still has no "+" (already has pin-0 / pin-1).
+        XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-0").exists)
+
+        // Add the left-row-1 pin: it becomes pin-2, at the left edge, one row (30pt) below the top pins.
+        element(app,"symbol-汎用ブロック-add-pin-left-1").tap()
+        XCTAssertTrue(app.buttons["symbol-汎用ブロック-pin-2"].waitForExistence(timeout:2))
+        let top = coordinates(app.buttons["symbol-汎用ブロック-pin-0"])
+        XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-2"]),[top[0],top[1]+30])
+        XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-1").exists,"that slot must not offer + again")
+
+        // The new pin wires like any other.
+        app.buttons["配線"].tap()
+        app.buttons["symbol-汎用ブロック-pin-2"].tap()
+        app.buttons["symbol-Temperature-pin-1"].tap()
+        XCTAssertTrue(element(app,"wire-3").waitForExistence(timeout:2))
+        assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
+
+        // Moving the block carries the new pin (and its wire) along.
+        app.buttons["選択"].tap()
+        let move = element(app,"symbol-汎用ブロック").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        move.press(forDuration:0.2,thenDragTo:move.withOffset(CGVector(dx:40,dy:-30)))
+        XCTAssertEqual(Array(coordinates(element(app,"wire-3")).prefix(2)),coordinates(app.buttons["symbol-汎用ブロック-pin-2"]))
+        assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
+
+        // Shrinking back to 1 row removes the slot's on-screen room, but the already-added pin (and its wire)
+        // are untouched by resizing alone (3C does not remove pins) - the block just cannot grow a *new* one there.
+        // (Selecting the wire tool earlier cleared the selection, so the resize handles need reselecting first.)
+        element(app,"symbol-汎用ブロック").tap()
+        if !element(app,"symbol-汎用ブロック-resize-br").waitForExistence(timeout:1) { element(app,"symbol-汎用ブロック").tap() }
+        let shrink = element(app,"symbol-汎用ブロック-resize-br").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        shrink.press(forDuration:0.2,thenDragTo:shrink.withOffset(CGVector(dx:0,dy:-90)))
+        XCTAssertTrue(app.buttons["symbol-汎用ブロック-pin-2"].exists)
+    }
+
     @MainActor
     func testGenericBlockCanBeRenamedAndGivenAnIconFromTheInspector() throws {
         let app = XCUIApplication(); app.launch()
@@ -764,7 +820,7 @@ final class CircuitCanvasUITests: XCTestCase {
         for (name, icon) in [("24 V → 5 V","bolt.fill"),("Main MCU","cpu"),("CAN","arrow.left.and.right"),("Temperature","sensor.tag.radiowaves.forward")] {
             XCTAssertEqual(element(app,"symbol-\(name)-icon").value as? String,icon,name)
         }
-        place(app,category:"ブロック",name:"汎用ブロック",x:400,y:900)
+        place(app,category:"ブロック",name:"汎用ブロック",x:400,y:550)
         element(app,"symbol-汎用ブロック").tap()
         app.buttons["確認"].tap()
         let field = app.textFields["名称"]

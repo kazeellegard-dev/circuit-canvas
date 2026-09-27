@@ -34,10 +34,12 @@ private enum NoteType: String, CaseIterable, Identifiable { case modification = 
 private struct SymbolItem: Identifiable {
     let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize
     var icon: String   // Stored (not derived from kind): the user can change a block's icon after placing it.
+    var blockPins: [SymbolKind.BlockPin]   // Meaningful only when kind.isBlock; circuit symbols use kind.pinSpecs.
     init(title: String, kind: SymbolKind, position: CGPoint, icon: String? = nil) {
         self.title = title; self.kind = kind; self.position = position
         self.rotation = kind.defaultRotation; self.size = kind.frameSize
         self.icon = icon ?? kind.icon
+        self.blockPins = SymbolKind.defaultBlockPins
     }
 }
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint?; var size: CGSize = NoteSize.standard }
@@ -300,6 +302,25 @@ struct ContentView: View {
                                 .onChanged { value in resize(symbolID: id, corner: corner, translation: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
                                 .onEnded { _ in resizeDrag = nil })
                     }
+                    // "+" on every row this block's height allows that does not have a pin yet (3C).
+                    let taken = Set(symbol.blockPins)
+                    let open = SymbolKind.blockPinSlots(height: symbol.size.height).filter { !taken.contains($0) }
+                    ForEach(Array(open.enumerated()), id: \.offset) { _, slot in
+                        let y = bounds.minY + 15 + CGFloat(slot.slot) * 30
+                        let x = slot.side == .left ? bounds.minX : bounds.maxX
+                        let plusSide = ResizableGeometry.screenConstant(28, scale: canvasScale)
+                        Button { addBlockPin(symbolID: id, pin: slot) } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 16*k))
+                                .background(Circle().fill(.background))
+                                .frame(width: plusSide, height: plusSide)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(x: x, y: y)
+                        .accessibilityLabel("ピンを追加")
+                        .accessibilityIdentifier("symbol-\(symbol.title)-add-pin-\(slot.side == .left ? "left" : "right")-\(slot.slot)")
+                    }
                 }
                 ForEach($notes) { $note in
                     NoteCard(
@@ -475,6 +496,12 @@ struct ContentView: View {
         let result = NoteSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
         notes[i].position = result.center; notes[i].size = result.size
     }
+    /// Adding a pin never needs a reroute: it starts with no wire attached.
+    private func addBlockPin(symbolID: UUID, pin: SymbolKind.BlockPin) {
+        guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock,
+              !symbols[i].blockPins.contains(pin) else { return }
+        symbols[i].blockPins.append(pin)
+    }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
         let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
@@ -572,7 +599,7 @@ struct ContentView: View {
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
-    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation, size:symbol.size) }
+    private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation, size:symbol.size, blockPins:symbol.blockPins) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
     private func isConnected(_ symbol: SymbolItem) -> Bool { pins(for: symbol).contains { pin in wires.contains { $0.start.distance(to: pin) < 1 || $0.end.distance(to: pin) < 1 } } }
 
@@ -586,7 +613,7 @@ struct ContentView: View {
     private func direction(at pin: CGPoint) -> WireRouting.Direction? {
         for symbol in symbols where !symbol.kind.isBlock {
             if let index = pins(for:symbol).firstIndex(of:pin) {
-                return symbol.kind.direction(for:index,rotation:symbol.rotation)
+                return symbol.kind.direction(for:index,rotation:symbol.rotation,blockPins:symbol.blockPins)
             }
         }
         return nil
@@ -678,7 +705,7 @@ private struct SymbolCard: View {
     let select: () -> Void
     let selectPin: (Int) -> Void
     private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation, size:symbol.size) }
-    private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation, size:symbol.size) }
+    private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation, size:symbol.size, blockPins:symbol.blockPins) }
     /// Small symbols still get a finger-sized (44 pt) select / drag target.
     private var hitSize: CGSize { CGSize(width:max(bounds.width,44), height:max(bounds.height,44)) }
     var body: some View {
@@ -710,7 +737,7 @@ private struct SymbolCard: View {
             .accessibilityIdentifier("symbol-\(symbol.title)")
             .accessibilityValue("kind=\(symbol.kind.rawValue), style=\(symbol.kind.isBlock ? "block" : "circuit")")
 
-            ForEach(0..<symbol.kind.pinCount, id: \.self) { index in
+            ForEach(0..<(symbol.kind.isBlock ? symbol.blockPins.count : symbol.kind.pinCount), id: \.self) { index in
                 pin(index).offset(x:offsets[index].x,y:offsets[index].y)
             }
             if symbol.kind.isBlock {
@@ -780,7 +807,7 @@ private struct SymbolCard: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(symbol.kind.pinSpecs[index].name)
+        .accessibilityLabel(symbol.kind.isBlock ? (symbol.blockPins[index].side == .left ? "左ピン" : "右ピン") : symbol.kind.pinSpecs[index].name)
         .accessibilityIdentifier("symbol-\(symbol.title)-pin-\(index)")
         .accessibilityValue("\(symbol.position.x + offsets[index].x),\(symbol.position.y + offsets[index].y)")
         .accessibilityAddTraits(wireStartPinIndex == index ? .isSelected : [])

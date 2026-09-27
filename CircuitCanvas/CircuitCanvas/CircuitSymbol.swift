@@ -167,18 +167,36 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         guard let index = old.firstIndex(where: { hypot($0.x-point.x,$0.y-point.y) < 1 }) else { return nil }
         return new[index]
     }
-    /// Pin positions relative to the centre. Blocks put the two pins in the first row slot of the left and right
-    /// edges (y = top + 15, one slot per 30pt of height); that is the centre line for the default 90 × 30.
-    private func offsets(rotation angle: Int, blockSize: CGSize?) -> [CGPoint] {
+    /// One of a block's pins: which edge, and which 30pt-tall row (0 = the top row). A block's own pin list is
+    /// per-instance (SymbolItem.blockPins), not per-kind like `pinSpecs` - a block can grow pins one at a time.
+    struct BlockPin: Hashable {
+        enum Side { case left, right }
+        var side: Side
+        var slot: Int
+        var direction: WireRouting.Direction { side == .left ? .left : .right }
+    }
+    /// The two pins every new block starts with: left and right, both in the top row.
+    static let defaultBlockPins: [BlockPin] = [.init(side:.left,slot:0), .init(side:.right,slot:0)]
+    /// Every (side, slot) a block of this height could hold a pin at - one slot per 30pt row, per edge.
+    static func blockPinSlots(height: CGFloat) -> [BlockPin] {
+        let rows = max(1, Int((height / 30).rounded()))
+        return (0..<rows).flatMap { slot in [BlockPin(side:.left,slot:slot), BlockPin(side:.right,slot:slot)] }
+    }
+    private static func blockPinOffset(_ pin: BlockPin, size: CGSize) -> CGPoint {
+        CGPoint(x: pin.side == .left ? -size.width/2 : size.width/2, y: -size.height/2 + 15 + CGFloat(pin.slot)*30)
+    }
+    /// Pin positions relative to the centre. `blockPins` is required for a block (defaults to the standard two,
+    /// top row) and ignored for a circuit symbol, which always uses its fixed `pinSpecs`.
+    private func offsets(rotation angle: Int, blockSize: CGSize?, blockPins: [BlockPin]?) -> [CGPoint] {
         if isBlock {
             let size = blockSize ?? frameSize
-            return [CGPoint(x:-size.width/2,y:-size.height/2+15), CGPoint(x:size.width/2,y:-size.height/2+15)]
+            return (blockPins ?? Self.defaultBlockPins).map { Self.blockPinOffset($0, size: size) }
         }
         return pinSpecs.map { rotated($0.offset,by:angle) }
     }
-    func pins(at position: CGPoint, rotation: Int? = nil, size: CGSize? = nil) -> [CGPoint] {
+    func pins(at position: CGPoint, rotation: Int? = nil, size: CGSize? = nil, blockPins: [BlockPin]? = nil) -> [CGPoint] {
         let angle = isBlock ? 0 : (rotation ?? defaultRotation)
-        return offsets(rotation:angle,blockSize:size).map { CGPoint(x: position.x + $0.x, y: position.y + $0.y) }
+        return offsets(rotation:angle,blockSize:size,blockPins:blockPins).map { CGPoint(x: position.x + $0.x, y: position.y + $0.y) }
     }
     func body(at position: CGPoint, rotation: Int, size: CGSize? = nil) -> CGRect {
         let vertical = !isBlock && rotation % 180 != 0
@@ -186,8 +204,9 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         let box = vertical ? CGSize(width: frame.height, height: frame.width) : frame
         return CGRect(x:position.x-box.width/2,y:position.y-box.height/2,width:box.width,height:box.height)
     }
-    func direction(for pin: Int, rotation: Int) -> WireRouting.Direction {
-        WireRouting.Direction(rawValue: (pinSpecs[pin].direction.rawValue + (isBlock ? 0 : rotation/90)) % 4)!
+    func direction(for pin: Int, rotation: Int, blockPins: [BlockPin]? = nil) -> WireRouting.Direction {
+        if isBlock { return (blockPins ?? Self.defaultBlockPins)[pin].direction }
+        return WireRouting.Direction(rawValue: (pinSpecs[pin].direction.rawValue + rotation/90) % 4)!
     }
     var letter: String? {
         switch self { case .motor: "M"; case .voltmeter: "V"; case .ammeter: "A"; default: nil }
