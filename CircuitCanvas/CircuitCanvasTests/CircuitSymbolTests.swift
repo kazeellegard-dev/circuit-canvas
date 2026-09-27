@@ -276,4 +276,15 @@ struct CircuitSymbolTests {
             }
         }
     }
+
+    /// The rotate/relate canvas buttons use this to stay >= 32pt on screen below 100% zoom (Codex review: a live
+    /// pinch-based UI check of this could not be trusted, since XCUITest's synthetic pinch turned out to be
+    /// unreliable in this harness - it sometimes lands as a plain pan and never changes the reported scale at all).
+    @Test func screenConstantGrowsBelowFullZoomAndNeverShrinksAboveIt() {
+        #expect(ResizableGeometry.screenConstant(32, scale: 1) == 32)
+        #expect(ResizableGeometry.screenConstant(32, scale: 0.5) == 64)
+        #expect(ResizableGeometry.screenConstant(32, scale: 0.25) == 128)
+        #expect(ResizableGeometry.screenConstant(32, scale: 2) == 32)     // zoomed in: never smaller than the base
+        #expect(ResizableGeometry.screenConstant(24, scale: 0.5) == 48)
+    }
 }

@@ -262,15 +262,16 @@ struct ContentView: View {
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), !symbol.kind.isBlock {
                     let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
                     // Stays >= 32pt on screen at any zoom, like the resize handles.
-                    let k = max(1, 1 / canvasScale)
+                    let side = ResizableGeometry.screenConstant(32, scale: canvasScale)
+                    let arm = ResizableGeometry.screenConstant(24, scale: canvasScale)
                     Button { rotateSymbol(id) } label: {
                         Image(systemName:"arrow.clockwise")
-                            .frame(width:32*k,height:32*k)
+                            .frame(width:side,height:side)
                             .background(.regularMaterial,in:Circle())
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .position(x:bounds.maxX+24*k,y:bounds.minY-24*k)
+                    .position(x:bounds.maxX+arm,y:bounds.minY-arm)
                     .accessibilityLabel("回転")
                     .accessibilityIdentifier("symbol-\(symbol.title)-rotate")
                 }
@@ -327,14 +328,16 @@ struct ContentView: View {
                     }
                     // Same idea as the circuit-symbol rotate button: an action, next to the selected item, that
                     // needs no trip through the inspector sheet (which would then block tapping the canvas below it).
+                    let relateSide = ResizableGeometry.screenConstant(32, scale: canvasScale)
+                    let relateArm = ResizableGeometry.screenConstant(24, scale: canvasScale)
                     Button { linkingNote = id } label: {
                         Image(systemName:"arrowshape.turn.up.right")
-                            .frame(width:32*k,height:32*k)
+                            .frame(width:relateSide,height:relateSide)
                             .background(.regularMaterial,in:Circle())
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .position(x:bounds.midX,y:bounds.minY-24*k)
+                    .position(x:bounds.midX,y:bounds.minY-relateArm)
                     .accessibilityLabel("付箋を関連付け")
                     .accessibilityIdentifier("experiment-note-\(note.title)-relate")
                 }

@@ -9,6 +9,9 @@ enum SymbolCategory: String, CaseIterable, Identifiable {
 /// Shared corner-drag resize math for anything sized in fixed steps within a min/max range (block-diagram
 /// symbols, experiment notes): snapping the size, moving the opposite corner, and the resize handle's hit square.
 enum ResizableGeometry {
+    /// `base` scaled up so it stays constant on screen as the canvas zooms below 100 %: at `scale` 0.5 it doubles,
+    /// at 1.0 or above it is unchanged (buttons and handles never shrink further when zoomed *in*).
+    static func screenConstant(_ base: CGFloat, scale: CGFloat) -> CGFloat { base * max(1, 1 / scale) }
     static func snapped(_ proposed: CGSize, step: CGFloat, minimum: CGSize, maximum: CGSize) -> CGSize {
         func snap(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
             min(max(low + step * ((value - low) / step).rounded(), low), high)
