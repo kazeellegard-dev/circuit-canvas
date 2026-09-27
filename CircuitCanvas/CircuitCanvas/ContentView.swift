@@ -119,6 +119,10 @@ struct ContentView: View {
     @State private var viewportSize: CGSize = .zero   // kept up to date by `editor`'s GeometryReader, for the zoom menu
     @State private var showLibrary = false
     @State private var showInspector = false
+    @State private var showSettings = false
+    @State private var showResetConfirmation = false
+    @State private var canvasName = "Circuit Canvas"
+    @State private var canvasDescription = ""
     @State private var symbols: [SymbolItem] = [
         // All four kinds folded into the single generic block; the icon is kept explicit so the look does not change.
         .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
@@ -144,7 +148,7 @@ struct ContentView: View {
                     libraryView.frame(height: 132)
                 }
             }
-            .navigationTitle("Circuit Canvas")
+            .navigationTitle(canvasName)
             .onAppear {
                 reroute()
                 // Test-only hook (Codex review, 4E round 3): XCUITest's synthetic pinch cannot reliably reach
@@ -172,9 +176,44 @@ struct ContentView: View {
                     }
                     .accessibilityIdentifier("zoom-menu")
                     Button("確認", systemImage: "slider.horizontal.3") { showInspector = true }
+                    Button("設定", systemImage: "gearshape") { showSettings = true }
                 }
             }
             .sheet(isPresented: $showInspector) { NavigationStack { inspector.navigationTitle("インスペクタ") } }
+            .sheet(isPresented: $showSettings) { NavigationStack { settings.navigationTitle("設定") } }
+        }
+    }
+
+    private var settings: some View {
+        Form {
+            Section("キャンバス") {
+                TextField("名称", text: $canvasName)
+                    .accessibilityIdentifier("settings-canvas-name")
+            }
+            Section("説明") {
+                TextField("説明（任意）", text: $canvasDescription, axis: .vertical)
+                    .accessibilityIdentifier("settings-canvas-description")
+            }
+            // Kept in its own section, at the very bottom, away from the harmless fields above - an
+            // irreversible action deserves some distance from an accidental tap.
+            Section {
+                Button("キャンバスをリセット", systemImage: "trash", role: .destructive) {
+                    showResetConfirmation = true
+                }
+                .accessibilityIdentifier("settings-reset-canvas")
+            } footer: {
+                Text("シンボル・配線・付箋を全て削除します。元に戻せません。")
+            }
+        }
+        .formStyle(.grouped)
+        // .alert rather than .confirmationDialog: on iPad the latter presents as a popover that, per
+        // platform convention, omits its own Cancel row (tapping outside dismisses it instead) - not what
+        // this irreversible action should rely on. An alert always shows both buttons explicitly.
+        .alert("キャンバスをリセット", isPresented: $showResetConfirmation) {
+            Button("キャンセル", role: .cancel) {}
+            Button("リセット", role: .destructive) { resetCanvas() }
+        } message: {
+            Text("本当にリセットしますか？元に戻せません。")
         }
     }
 
@@ -683,6 +722,14 @@ struct ContentView: View {
         linkingNote = nil
         if pendingRelateFrom?.id == id { pendingRelateFrom = nil }
         notes.removeAll { $0.id == id }
+    }
+    /// Settings' "キャンバスをリセット" (only reachable after its own confirmation dialog): clears the
+    /// diagram back to blank, and any state that referred to what was on it.
+    private func resetCanvas() {
+        symbols = []; notes = []; wires = []
+        selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+        tool = .select
+        reroute()
     }
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
