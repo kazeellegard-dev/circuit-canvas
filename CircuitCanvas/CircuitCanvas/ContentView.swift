@@ -261,14 +261,16 @@ struct ContentView: View {
                 }
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), !symbol.kind.isBlock {
                     let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
+                    // Stays >= 32pt on screen at any zoom, like the resize handles.
+                    let k = max(1, 1 / canvasScale)
                     Button { rotateSymbol(id) } label: {
                         Image(systemName:"arrow.clockwise")
-                            .frame(width:32,height:32)
+                            .frame(width:32*k,height:32*k)
                             .background(.regularMaterial,in:Circle())
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .position(x:bounds.maxX+24,y:bounds.minY-24)
+                    .position(x:bounds.maxX+24*k,y:bounds.minY-24*k)
                     .accessibilityLabel("回転")
                     .accessibilityIdentifier("symbol-\(symbol.title)-rotate")
                 }
@@ -327,13 +329,13 @@ struct ContentView: View {
                     // needs no trip through the inspector sheet (which would then block tapping the canvas below it).
                     Button { linkingNote = id } label: {
                         Image(systemName:"arrowshape.turn.up.right")
-                            .frame(width:32,height:32)
+                            .frame(width:32*k,height:32*k)
                             .background(.regularMaterial,in:Circle())
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .position(x:bounds.midX,y:bounds.minY-24)
-                    .accessibilityLabel("関連付け")
+                    .position(x:bounds.midX,y:bounds.minY-24*k)
+                    .accessibilityLabel("付箋を関連付け")
                     .accessibilityIdentifier("experiment-note-\(note.title)-relate")
                 }
 
@@ -769,14 +771,15 @@ private struct NoteCard: View {
     let selected: Bool
     let select: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // `.topLeading` on the frame below anchors this (possibly shorter than the frame) stack at the top,
+        // so there is no need for a trailing Spacer - which would only eat into the room the body text has.
+        VStack(alignment: .leading, spacing: 4) {
             HStack { Image(systemName: note.complete ? "checkmark.circle.fill" : "wrench.and.screwdriver"); Text(note.type.rawValue); Spacer() }.font(.caption.weight(.medium))
             Text(note.title).font(.subheadline.weight(.semibold)).lineLimit(2)
             Text(note.body).font(.caption)
-            Spacer(minLength: 0)
         }
         .foregroundStyle(note.complete ? .secondary : .primary)
-        .padding(12)
+        .padding(10)
         .frame(width: note.size.width, height: note.size.height, alignment: .topLeading)
         // The body can outgrow a note shrunk to its minimum; clip rather than spill onto the canvas.
         .clipShape(RoundedRectangle(cornerRadius: 10))

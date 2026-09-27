@@ -51,25 +51,68 @@ final class CircuitCanvasUITests: XCTestCase {
         func size() -> [Double] {
             (element(app,"experiment-note-R12を変更-size").value as? String ?? "").split(separator:",").compactMap { Double($0) }
         }
+        func position() -> [Double] {
+            (note.value as? String ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
         XCTAssertEqual(size(),[170,100])
         XCTAssertFalse(element(app,"experiment-note-R12を変更-resize-br").exists)
         note.tap()
         XCTAssertTrue(element(app,"experiment-note-R12を変更-resize-br").waitForExistence(timeout:2))
+        // The note starts only 80pt from the top edge of the canvas; move it clear of every edge first; a
+        // corner handle placed off-canvas by a later resize would be untouchable, which is a test-setup problem,
+        // not a production one (a note dragged near an edge in the app is bounded by the same canvas edges).
+        let relocate = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        relocate.press(forDuration:0.2,thenDragTo:relocate.withOffset(CGVector(dx:0,dy:450)))
         func drag(_ corner: String, _ dx: CGFloat, _ dy: CGFloat) {
             let handle = element(app,"experiment-note-R12を変更-resize-\(corner)")
             let start = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
             start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:dx,dy:dy)))
         }
-        // br: grows by 20pt steps; a drag too short for the next step changes nothing.
+        // br: grows by 20pt steps; a drag too short for the next step changes nothing. The top-left corner
+        // (center - half the size) must stay put, so the center moves by exactly half of what the size grew.
+        let initialTopLeft = [position()[0]-size()[0]/2, position()[1]-size()[1]/2]
         drag("br",5,5)
         XCTAssertEqual(size(),[170,100])
         drag("br",40,40)
         XCTAssertEqual(size(),[210,140])
-        // tl: shrinks towards the minimum and stops there, however far the drag goes.
-        drag("tl",900,900)
-        XCTAssertEqual(size(),[150,80])
-        // The body text is still there (clipped, not hidden) at the minimum size.
-        XCTAssertTrue(note.staticTexts["10 kΩへ変更して波形を再測定"].exists)
+        XCTAssertEqual(position()[0]-size()[0]/2,initialTopLeft[0],accuracy:1,"br must keep the top-left corner fixed")
+        XCTAssertEqual(position()[1]-size()[1]/2,initialTopLeft[1],accuracy:1,"br must keep the top-left corner fixed")
+
+        // tr: the bottom-left corner stays; tl: the bottom-right corner stays; bl: the top-right corner stays.
+        func corner(_ cx: Int, _ cy: Int) -> [Double] { [position()[0]+CGFloat(cx)*size()[0]/2, position()[1]+CGFloat(cy)*size()[1]/2] }
+        let bottomLeft = corner(-1,1)
+        drag("tr",30,-20)
+        XCTAssertEqual(size(),[250,160])
+        XCTAssertEqual(corner(-1,1)[0],bottomLeft[0],accuracy:1,"tr must keep the bottom-left corner fixed")
+        XCTAssertEqual(corner(-1,1)[1],bottomLeft[1],accuracy:1,"tr must keep the bottom-left corner fixed")
+        let bottomRight = corner(1,1)
+        drag("tl",-20,-20)
+        XCTAssertEqual(size(),[270,180])
+        XCTAssertEqual(corner(1,1)[0],bottomRight[0],accuracy:1,"tl must keep the bottom-right corner fixed")
+        XCTAssertEqual(corner(1,1)[1],bottomRight[1],accuracy:1,"tl must keep the bottom-right corner fixed")
+        let topRight = corner(1,-1)
+        drag("bl",-20,20)
+        XCTAssertEqual(size(),[290,200])
+        XCTAssertEqual(corner(1,-1)[0],topRight[0],accuracy:1,"bl must keep the top-right corner fixed")
+        XCTAssertEqual(corner(1,-1)[1],topRight[1],accuracy:1,"bl must keep the top-right corner fixed")
+
+        // The maximum (390 x 320) holds, however far past it the drag goes; the minimum likewise.
+        // (A translation much larger than this, e.g. 900pt, can put the touch's destination outside the
+        // simulator's screen, where XCUITest clamps it - so "far enough to clear the remaining gap, but still
+        // an on-screen point" is used here, not an arbitrarily huge one.)
+        drag("br",200,200)
+        XCTAssertEqual(size(),[390,320])
+        drag("br",200,200)
+        XCTAssertEqual(size(),[390,320],"must not exceed the maximum")
+        drag("tl",400,400)
+        XCTAssertEqual(size(),[150,80],"must not go below the minimum")
+
+        // The body text, at the minimum size, is fully inside the note (not cut off at the bottom) - existence
+        // alone would not catch a clipped, unreadable line.
+        let body = note.staticTexts["10 kΩへ変更して波形を再測定"]
+        XCTAssertTrue(body.exists)
+        XCTAssertLessThanOrEqual(body.frame.maxY,note.frame.maxY,"the body text must not be clipped at the minimum size")
+        XCTAssertGreaterThanOrEqual(body.frame.minY,note.frame.minY)
     }
 
     @MainActor
@@ -87,6 +130,24 @@ final class CircuitCanvasUITests: XCTestCase {
         target.tap()
         XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
         XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400")
+
+        // The long-press context menu route (S5) still works, independently of the canvas button.
+        note.press(forDuration:0.6)
+        app.buttons["関連付け"].tap()
+        XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists)
+        let secondTarget = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:500,dy:600))
+        secondTarget.tap()
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"500,600")
+
+        // At 50% zoom, the button's on-screen hit area must still be >= 32pt (Codex review): it grows in the
+        // canvas's own (pre-scale) coordinate space so it stays constant on screen.
+        element(app,"circuit-canvas").pinch(withScale:0.5,velocity:-1)
+        XCTAssertTrue(relate.waitForExistence(timeout:2))
+        XCTAssertGreaterThanOrEqual(relate.frame.width,31.5)
+        XCTAssertGreaterThanOrEqual(relate.frame.height,31.5)
+        relate.tap()
+        XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists,"the shrunk button must still be tappable")
+        app.buttons["配線"].tap()   // cancel linking without depending on a canvas tap under the new zoom/pan
     }
 
     @MainActor
