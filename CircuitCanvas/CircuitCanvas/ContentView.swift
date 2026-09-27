@@ -985,12 +985,10 @@ struct ContentView: View {
     /// wire is expected here, per this task ("どこにも繋がっていない配線が残る可能性がある...後で対応").
     private func deleteWireSegment(wireID: UUID, segment: Int) {
         guard let i = wires.firstIndex(where: { $0.id == wireID }) else { return }
-        let points = wires[i].points
-        guard segment >= 0, segment+1 < points.count else { return }
-        let front = Array(points[0...segment]), back = Array(points[(segment+1)...])
+        let (front, back) = WireRouting.split(wires[i].points, at: segment)
         wires.remove(at: i)
-        if front.count >= 2 { wires.append(WireItem(start: front.first!, end: front.last!, points: front, manual: true, manualPoints: front)) }
-        if back.count >= 2 { wires.append(WireItem(start: back.first!, end: back.last!, points: back, manual: true, manualPoints: back)) }
+        if let front { wires.append(WireItem(start: front.first!, end: front.last!, points: front, manual: true, manualPoints: front)) }
+        if let back { wires.append(WireItem(start: back.first!, end: back.last!, points: back, manual: true, manualPoints: back)) }
     }
     private func beginSegmentDrag(at viewportPoint: CGPoint, translation: CGSize) {
         guard tool == .select, !editMode, segmentDrag == nil,

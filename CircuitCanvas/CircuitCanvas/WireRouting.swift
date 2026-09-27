@@ -16,6 +16,13 @@ enum WireRouting {
         var startDirection: Direction? = nil
         var endDirection: Direction? = nil
     }
+    /// Edit mode (4C): splits a path at the given segment, dropping that segment itself. Each side becomes
+    /// its own remaining path, or nil if fewer than 2 points are left on that side (nothing to keep there).
+    static func split(_ points: [CGPoint], at segment: Int) -> (front: [CGPoint]?, back: [CGPoint]?) {
+        guard segment >= 0, segment+1 < points.count else { return (points, nil) }
+        let front = Array(points[0...segment]), back = Array(points[(segment+1)...])
+        return (front.count >= 2 ? front : nil, back.count >= 2 ? back : nil)
+    }
     /// What `reroute` needs to know about one wire.
     struct Wire {
         var start: CGPoint, end: CGPoint

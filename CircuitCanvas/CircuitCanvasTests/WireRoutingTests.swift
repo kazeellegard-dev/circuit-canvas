@@ -566,4 +566,48 @@ struct WireRoutingTests {
         #expect(WireRouting.isOrthogonal(result[0]))
         #expect(result[0].first == wire.start && result[0].last == wire.end)
     }
+
+    // MARK: edit mode wire deletion (4C)
+
+    /// Deleting the only segment of a straight, 2-point wire leaves nothing on either side.
+    @Test func splittingTheOnlySegmentOfAStraightWireLeavesNothingOnEitherSide() {
+        let points = [p(0,0),p(100,0)]
+        let (front,back) = WireRouting.split(points, at: 0)
+        #expect(front == nil)
+        #expect(back == nil)
+    }
+
+    /// Deleting the first segment of a multi-segment path drops it and keeps the rest as the "back" side;
+    /// there is nothing left on the "front" side (a single point cannot be a wire).
+    @Test func splittingTheFirstSegmentKeepsOnlyTheRemainingBackSide() {
+        let points = [p(0,0),p(0,100),p(100,100),p(100,0)]
+        let (front,back) = WireRouting.split(points, at: 0)
+        #expect(front == nil)
+        #expect(back == [p(0,100),p(100,100),p(100,0)])
+    }
+
+    /// Deleting the last segment is the mirror image: the "front" side keeps everything up to the cut, and
+    /// there is nothing left on the "back" side.
+    @Test func splittingTheLastSegmentKeepsOnlyTheRemainingFrontSide() {
+        let points = [p(0,0),p(0,100),p(100,100),p(100,0)]
+        let (front,back) = WireRouting.split(points, at: 2)
+        #expect(front == [p(0,0),p(0,100),p(100,100)])
+        #expect(back == nil)
+    }
+
+    /// Deleting a middle segment splits the path into two independent remaining sides.
+    @Test func splittingAMiddleSegmentKeepsBothRemainingSidesSeparately() {
+        let points = [p(0,0),p(0,100),p(100,100),p(100,0),p(200,0)]
+        let (front,back) = WireRouting.split(points, at: 1)
+        #expect(front == [p(0,0),p(0,100)])
+        #expect(back == [p(100,100),p(100,0),p(200,0)])
+    }
+
+    /// Out-of-range segments are ignored rather than corrupting the path.
+    @Test func splittingAnOutOfRangeSegmentKeepsTheOriginalPathAsTheFrontSide() {
+        let points = [p(0,0),p(100,0)]
+        let (front,back) = WireRouting.split(points, at: 5)
+        #expect(front == points)
+        #expect(back == nil)
+    }
 }
