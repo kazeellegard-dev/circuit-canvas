@@ -315,12 +315,32 @@ final class CircuitCanvasUITests: XCTestCase {
         // MagnificationGesture at all. There is no other in-app way to reach a non-preset scale to test from
         // (the menu itself only ever sets exact presets), so when that happens, skip rather than fail on an
         // environment limitation the production code has no part in.
-        guard abs(exactScale() - 1) > 0.001 else {
-            throw XCTSkip("XCUITest's pinch did not change canvasScale in this environment (known harness limitation) - nothing to test the menu selection against.")
+        let presets: [Double] = [0.25,0.5,1,1.5,2]
+        guard presets.allSatisfy({ abs(exactScale() - $0) > 0.001 }) else {
+            throw XCTSkip("XCUITest's pinch did not land on a non-preset scale in this environment (known harness limitation) - nothing to test the menu selection against.")
         }
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-100"].tap()
         XCTAssertEqual(exactScale(),1,accuracy:0.0001)
+    }
+
+    /// The same acceptance criterion as above (selecting a preset from a non-preset scale must land exactly
+    /// on it), but reaching that starting scale through a test-only launch hook instead of a live pinch -
+    /// which this harness cannot reliably use to get there (see the skip above, and the note on
+    /// testOperationHintStaysFixedDuringZoomAndPan) - so this one always actually runs (Codex major, 4E round 3).
+    @MainActor
+    func testZoomMenuLandsExactlyOnAPresetFromAnInjectedNonPresetStartingScale() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "0.73"
+        app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
+        XCTAssertEqual(exactScale(),0.73,accuracy:0.0001,"the launch hook itself must have taken effect")
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-100"].tap()
+        XCTAssertEqual(exactScale(),1,accuracy:0.0001)
+        XCTAssertTrue(element(app,"circuit-canvas").value.map { ($0 as? String ?? "").contains("scale=100") } ?? false)
     }
 
     @MainActor

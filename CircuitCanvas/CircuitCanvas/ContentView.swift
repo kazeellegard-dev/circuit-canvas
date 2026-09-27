@@ -145,7 +145,17 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Circuit Canvas")
-            .onAppear { reroute() }
+            .onAppear {
+                reroute()
+                // Test-only hook (Codex review, 4E round 3): XCUITest's synthetic pinch cannot reliably reach
+                // a non-preset scale in this harness, so a UI test that must start from one (e.g. to check
+                // the zoom menu against a "candidate外" value, per this task's acceptance criterion 3) sets
+                // this launch environment variable instead. Absent in every normal launch, so it changes
+                // nothing outside a test that deliberately opts in.
+                if let raw = ProcessInfo.processInfo.environment["UITEST_INITIAL_ZOOM"], let value = Double(raw) {
+                    canvasScale = value; canvasScaleOrigin = value
+                }
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
