@@ -212,6 +212,15 @@ struct ContentView: View {
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
                     .scaleEffect(canvasScale, anchor: .topLeading)
                     .offset(canvasOffset)
+                if pendingRelateFrom != nil {
+                    // While waiting for the relate target tap, any point on the canvas must resolve to
+                    // setAnchor - even one over a note/symbol card, which would otherwise consume the tap
+                    // with its own selection gesture first (Codex major, 4A round 1).
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(canvasTapGesture)
+                        .accessibilityIdentifier("relate-target-capture")
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .coordinateSpace(name: "editorViewport")
@@ -459,6 +468,10 @@ struct ContentView: View {
         SpatialTapGesture(coordinateSpace: .named("editorViewport")).onEnded { tap in
                 let point = canvasPoint(from: tap.location)
                 if let pending = pendingRelateFrom { setAnchor(pending.id, point, corner: pending.corner); pendingRelateFrom = nil }
+                // A background tap while waiting for the corner pick cancels relate mode explicitly, rather
+                // than falling through to deselect and leaving linkingNote (and its hint) dangling (Codex
+                // minor, 4A round 1).
+                else if linkingNote != nil { linkingNote = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
@@ -939,6 +952,17 @@ private struct NoteCard: View {
             Text("anchor").font(.system(size:1)).opacity(0.01)
                 .accessibilityIdentifier("experiment-note-\(note.title)-anchor")
                 .accessibilityValue(note.anchor.map { "\(Int($0.x)),\(Int($0.y)),\(note.relateCorner.rawValue)" } ?? "")
+                .allowsHitTesting(false)
+            // The relate line's near end, using the exact same calculation as the Canvas drawing (the
+            // shared NoteCorner.point(in:)) - lets tests confirm it actually follows a move/resize, not
+            // just that the far end (anchor, above) stayed put (Codex minor, 4A round 1).
+            Text("relateStart").font(.system(size:1)).opacity(0.01)
+                .accessibilityIdentifier("experiment-note-\(note.title)-relate-start")
+                .accessibilityValue(note.anchor == nil ? "" : {
+                    let bounds = CGRect(x: note.position.x-note.size.width/2, y: note.position.y-note.size.height/2, width: note.size.width, height: note.size.height)
+                    let point = note.relateCorner.point(in: bounds)
+                    return "\(Int(point.x)),\(Int(point.y))"
+                }())
                 .allowsHitTesting(false)
             // Mirrors the block's `-icon` hidden text: Image(systemName:) is not reliably queryable once
             // nested inside a .accessibilityElement(children:) group.

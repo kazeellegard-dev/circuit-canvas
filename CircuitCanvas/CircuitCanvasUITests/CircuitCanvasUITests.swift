@@ -137,6 +137,14 @@ final class CircuitCanvasUITests: XCTestCase {
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         XCTAssertFalse(element(app,"experiment-note-R12を変更-relate").exists)
+
+        func size() -> [Double] { (element(app,"experiment-note-R12を変更-size").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        func position() -> [Double] { (note.value as? String ?? "").components(separatedBy: CharacterSet(charactersIn:"xy=, ")).compactMap{Double($0)} }
+        func relateStart() -> [Double] { (element(app,"experiment-note-R12を変更-relate-start").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        // Same calculation the production code shares between drawing and this hidden accessibility value
+        // (NoteCorner.point(in:)): the top-trailing corner of the note's current bounds.
+        func expectedTopTrailing() -> [Double] { let p = position(), s = size(); return [p[0]+s[0]/2, p[1]-s[1]/2] }
+
         note.tap()
         let relate = element(app,"experiment-note-R12を変更-relate")
         XCTAssertTrue(relate.waitForExistence(timeout:2))
@@ -147,18 +155,36 @@ final class CircuitCanvasUITests: XCTestCase {
         let topTrailing = element(app,"experiment-note-R12を変更-relate-corner-topTrailing")
         XCTAssertTrue(topTrailing.waitForExistence(timeout:2))
         topTrailing.tap()
-        // Step 2: tap the target, same as before.
+        // Step 2: tap the target - even one that lands on another card (here, the "Main MCU" symbol at
+        // canvas (370,250)), which has its own tap gesture that would otherwise consume the touch first
+        // (Codex major, 4A round 1: the target must be "any point on the canvas", not just empty space).
         XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists)
-        let target = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:400))
+        let target = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:370,dy:250))
         target.tap()
         XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
-        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400,topTrailing")
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"370,250,topTrailing")
+        XCTAssertEqual(relateStart()[0],expectedTopTrailing()[0],accuracy:1)
+        XCTAssertEqual(relateStart()[1],expectedTopTrailing()[1],accuracy:1)
+        // Placing the target did not actually select "Main MCU" or move focus away from the note.
+        XCTAssertFalse(element(app,"symbol-Main MCU-resize-tl").exists)
 
-        // Moving the note afterwards must not move the target (far) end of the line - only the note-side end,
-        // which is derived from the note's own bounds, follows.
+        // Moving the note afterwards must not move the target (far) end of the line - only the note-side end
+        // (relate-start), which is derived from the note's own bounds, follows.
         let start = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:30,dy:20)))
-        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400,topTrailing","the target end must stay fixed when the note moves")
+        XCTAssertEqual(position()[0]-30,430,accuracy:3,"the note must actually have moved")
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"370,250,topTrailing","the target end must stay fixed when the note moves")
+        XCTAssertEqual(relateStart()[0],expectedTopTrailing()[0],accuracy:1,"the near end must follow the move")
+        XCTAssertEqual(relateStart()[1],expectedTopTrailing()[1],accuracy:1)
+
+        // Resizing the note must also move the near end (still to the same corner) without touching the anchor.
+        XCTAssertTrue(element(app,"experiment-note-R12を変更-resize-br").waitForExistence(timeout:2))
+        let handle = element(app,"experiment-note-R12を変更-resize-br")
+        let handleStart = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handleStart.press(forDuration:0.05,thenDragTo:handleStart.withOffset(CGVector(dx:40,dy:40)))
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"370,250,topTrailing","the target end must stay fixed when the note resizes")
+        XCTAssertEqual(relateStart()[0],expectedTopTrailing()[0],accuracy:1,"the near end must follow the resize")
+        XCTAssertEqual(relateStart()[1],expectedTopTrailing()[1],accuracy:1)
 
         // The long-press context menu route (S5) still works, independently of the canvas button, and goes
         // through the same corner-pick step.
@@ -176,6 +202,23 @@ final class CircuitCanvasUITests: XCTestCase {
         // underlying formula (ResizableGeometry.screenConstant): a live pinch here could not be trusted to reliably
         // change the reported scale in this harness - it sometimes registered as a plain pan instead - so a
         // hard assertion on it would either be flaky or silently prove nothing.
+    }
+
+    @MainActor
+    func testTappingTheBackgroundWhilePickingARelateCornerCancelsInsteadOfLeavingTheHintStuck() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        element(app,"experiment-note-R12を変更-relate").tap()
+        XCTAssertTrue(app.staticTexts["関連付ける角をタップ"].waitForExistence(timeout:2))
+        // A background tap while still choosing a corner (Codex minor, 4A round 1) must cancel relate mode
+        // outright, not just deselect while leaving the "pick a corner" hint stuck on screen.
+        let background = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:50,dy:900))
+        background.tap()
+        XCTAssertFalse(app.staticTexts["関連付ける角をタップ"].exists)
+        XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
+        XCTAssertFalse(element(app,"experiment-note-R12を変更-relate-corner-topLeading").exists)
     }
 
     @MainActor
