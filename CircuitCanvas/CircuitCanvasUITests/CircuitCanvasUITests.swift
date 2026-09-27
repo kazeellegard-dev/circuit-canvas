@@ -735,26 +735,57 @@ final class CircuitCanvasUITests: XCTestCase {
         }
         app.terminate()
 
-        let blocks = ["DC/DC","MCU","CAN","センサー","汎用ブロック"]
+        // Blocks (3B): only one kind in the library now ("汎用ブロック"); name and icon are chosen afterwards.
         let blockApp = XCUIApplication(); blockApp.launch()
-        for (index,name) in blocks.enumerated() {
-            place(blockApp,category:"ブロック",name:name,x:100 + 200 * CGFloat(index % 4),y:560 + 110 * CGFloat(index / 4))
-        }
-        for (index,name) in blocks.enumerated() {
-            // CAN also exists in the initial diagram; any match is a block.
-            let symbols = blockApp.descendants(matching:.any).matching(identifier:"symbol-\(name)")
-            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("kind=\(name)"), name)
-            XCTAssertTrue((symbols.firstMatch.value as? String ?? "").contains("style=block"), name)
-            XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-0"].firstMatch.exists, name)
-            XCTAssertTrue(blockApp.buttons["symbol-\(name)-pin-1"].firstMatch.exists, name)
-            if name != "CAN" {
-                // Blocks are 90 × 30 with the pins on the axis at ±45.
-                let x = Double(100 + 200 * (index % 4)), y = Double(560 + 110 * (index / 4))
-                XCTAssertEqual(coordinates(blockApp.buttons["symbol-\(name)-pin-0"]),[x-45,y], name)
-                XCTAssertEqual(coordinates(blockApp.buttons["symbol-\(name)-pin-1"]),[x+45,y], name)
-            }
-        }
+        blockApp.buttons["library-category-ブロック"].tap()
+        XCTAssertTrue(blockApp.buttons["library-汎用ブロック"].exists)
+        XCTAssertFalse(blockApp.buttons["library-DC/DC"].exists)
+        XCTAssertFalse(blockApp.buttons["library-MCU"].exists)
+        XCTAssertFalse(blockApp.buttons["library-CAN"].exists)
+        XCTAssertFalse(blockApp.buttons["library-センサー"].exists)
+        place(blockApp,category:"ブロック",name:"汎用ブロック",x:400,y:560)
+        let placedSymbol = blockApp.descendants(matching:.any).matching(identifier:"symbol-汎用ブロック").firstMatch
+        XCTAssertTrue((placedSymbol.value as? String ?? "").contains("kind=汎用ブロック"))
+        XCTAssertTrue((placedSymbol.value as? String ?? "").contains("style=block"))
+        XCTAssertEqual(element(blockApp,"symbol-汎用ブロック-icon").value as? String,"square.dashed")
+        XCTAssertTrue(blockApp.buttons["symbol-汎用ブロック-pin-0"].firstMatch.exists)
+        XCTAssertTrue(blockApp.buttons["symbol-汎用ブロック-pin-1"].firstMatch.exists)
+        XCTAssertEqual(coordinates(blockApp.buttons["symbol-汎用ブロック-pin-0"]),[355,560])
+        XCTAssertEqual(coordinates(blockApp.buttons["symbol-汎用ブロック-pin-1"]),[445,560])
         blockApp.terminate()
+    }
+
+    /// 3B: renaming a block and changing its icon from the inspector (the library only offers the generic block
+    /// now; everything else is chosen afterwards). Also checks the four initial blocks kept their original icon.
+    @MainActor
+    func testGenericBlockCanBeRenamedAndGivenAnIconFromTheInspector() throws {
+        let app = XCUIApplication(); app.launch()
+        // The initial diagram's blocks are all "汎用ブロック" underneath, but keep their original look.
+        for (name, icon) in [("24 V → 5 V","bolt.fill"),("Main MCU","cpu"),("CAN","arrow.left.and.right"),("Temperature","sensor.tag.radiowaves.forward")] {
+            XCTAssertEqual(element(app,"symbol-\(name)-icon").value as? String,icon,name)
+        }
+        place(app,category:"ブロック",name:"汎用ブロック",x:400,y:900)
+        element(app,"symbol-汎用ブロック").tap()
+        app.buttons["確認"].tap()
+        let field = app.textFields["名称"]
+        field.tap()
+        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:10) + "電源ユニット")
+        XCTAssertTrue(app.buttons["inspector-icon-picker"].waitForExistence(timeout:2))
+        app.buttons["inspector-icon-picker"].tap()
+        XCTAssertTrue(app.staticTexts["アイコンを選択"].waitForExistence(timeout:2))
+        XCTAssertTrue(app.buttons["icon-picker-square.dashed"].isSelected)
+        app.buttons["icon-picker-bolt.batteryblock"].tap()
+        // Selecting pops back to the symbol section automatically.
+        XCTAssertTrue(app.buttons["inspector-icon-picker"].waitForExistence(timeout:2))
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertTrue(element(app,"symbol-電源ユニット").waitForExistence(timeout:2))
+        XCTAssertEqual(element(app,"symbol-電源ユニット-icon").value as? String,"bolt.batteryblock")
+        // Reopen and confirm the picker highlights the current icon.
+        element(app,"symbol-電源ユニット").tap()
+        app.buttons["確認"].tap()
+        app.buttons["inspector-icon-picker"].tap()
+        XCTAssertTrue(app.buttons["icon-picker-bolt.batteryblock"].isSelected)
+        XCTAssertFalse(app.buttons["icon-picker-square.dashed"].isSelected)
     }
 
     @MainActor

@@ -467,8 +467,8 @@ struct WireRoutingTests {
     func fuzzedMovesResizesRotationsAndDragsNeverProduceADiagonalWire(seed: UInt64) {
         var rng = SeededGenerator(seed: seed)
         var symbols = [
-            FuzzSymbol(kind:.mcu,position:p(300,300),rotation:0,size:BlockSize.standard),
-            FuzzSymbol(kind:.mcu,position:p(700,300),rotation:0,size:BlockSize.standard),
+            FuzzSymbol(kind:.block,position:p(300,300),rotation:0,size:BlockSize.standard),
+            FuzzSymbol(kind:.block,position:p(700,300),rotation:0,size:BlockSize.standard),
             FuzzSymbol(kind:.resistor,position:p(500,600),rotation:0,size:nil),
             FuzzSymbol(kind:.npn,position:p(300,600),rotation:0,size:nil)
         ]

@@ -108,8 +108,8 @@ struct CircuitSymbolTests {
     }
 
     @Test func catalogueCategoriesAndVectorGeometry() {
-        #expect(SymbolKind.allCases.count == 41)
-        #expect(SymbolKind.allCases.filter(\.isBlock).count == 5)
+        #expect(SymbolKind.allCases.count == 37)
+        #expect(SymbolKind.allCases.filter(\.isBlock).count == 1)
         let counts = Dictionary(grouping:SymbolKind.allCases,by:\.category).mapValues(\.count)
         #expect(counts[.semiconductor] == 9 && counts[.logic] == 6 && counts[.relayConnector] == 2)
         #expect(counts[.power] == 5 && counts[.passive] == 5 && counts[.protection] == 3 && counts[.load] == 6)
@@ -260,8 +260,8 @@ struct CircuitSymbolTests {
     @Test func resizeHandlesAreFingerSizedAndClearOfPinsAtEveryZoom() {
         let center = CGPoint(x:400,y:300)
         for size in [CGSize(width:90,height:30),CGSize(width:150,height:90),CGSize(width:300,height:180)] {
-            let body = SymbolKind.mcu.body(at:center,rotation:0,size:size)
-            let pins = SymbolKind.mcu.pins(at:center,size:size)
+            let body = SymbolKind.block.body(at:center,rotation:0,size:size)
+            let pins = SymbolKind.block.pins(at:center,size:size)
             let pinSquares = pins.map { CGRect(x:$0.x-14,y:$0.y-14,width:28,height:28) }
             for scale in [CGFloat(0.5),0.75,1,1.5,2.5] {
                 var squares: [CGRect] = []

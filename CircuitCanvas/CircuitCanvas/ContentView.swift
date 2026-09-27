@@ -31,7 +31,15 @@ private enum NoteSize {
 }
 private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
-private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize; var icon: String { kind.icon }; init(title: String, kind: SymbolKind, position: CGPoint) { self.title = title; self.kind = kind; self.position = position; self.rotation = kind.defaultRotation; self.size = kind.frameSize } }
+private struct SymbolItem: Identifiable {
+    let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize
+    var icon: String   // Stored (not derived from kind): the user can change a block's icon after placing it.
+    init(title: String, kind: SymbolKind, position: CGPoint, icon: String? = nil) {
+        self.title = title; self.kind = kind; self.position = position
+        self.rotation = kind.defaultRotation; self.size = kind.frameSize
+        self.icon = icon ?? kind.icon
+    }
+}
 private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint?; var size: CGSize = NoteSize.standard }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
@@ -63,10 +71,11 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showInspector = false
     @State private var symbols: [SymbolItem] = [
-        .init(title: "24 V → 5 V", kind: .converter, position: .init(x: 120, y: 160)),
-        .init(title: "Main MCU", kind: .mcu, position: .init(x: 370, y: 250)),
-        .init(title: "CAN", kind: .can, position: .init(x: 620, y: 250)),
-        .init(title: "Temperature", kind: .sensor, position: .init(x: 120, y: 390))
+        // All four kinds folded into the single generic block; the icon is kept explicit so the look does not change.
+        .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
+        .init(title: "Main MCU", kind: .block, position: .init(x: 370, y: 250), icon: "cpu"),
+        .init(title: "CAN", kind: .block, position: .init(x: 620, y: 250), icon: "arrow.left.and.right"),
+        .init(title: "Temperature", kind: .block, position: .init(x: 120, y: 390), icon: "sensor.tag.radiowaves.forward")
     ]
     @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
     @State private var wires: [WireItem] = [
@@ -368,6 +377,10 @@ struct ContentView: View {
                         .accessibilityIdentifier("symbol-connection-status")
                         .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                     if symbol.wrappedValue.kind.isBlock {
+                        NavigationLink { IconPickerView(icon: symbol.icon) } label: {
+                            LabeledContent("アイコン") { Image(systemName: symbol.wrappedValue.icon) }
+                        }
+                        .accessibilityIdentifier("inspector-icon-picker")
                         LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
                         Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
@@ -706,6 +719,11 @@ private struct SymbolCard: View {
                     .accessibilityIdentifier("symbol-\(symbol.title)-size")
                     .accessibilityValue("\(Int(symbol.size.width)),\(Int(symbol.size.height))")
                     .allowsHitTesting(false)
+                Text("icon").font(.system(size:1)).opacity(0.01)
+                    .offset(x: bounds.width/2 - 3, y: bounds.height/2 - 6)
+                    .accessibilityIdentifier("symbol-\(symbol.title)-icon")
+                    .accessibilityValue(symbol.icon)
+                    .allowsHitTesting(false)
             }
             if !symbol.kind.isBlock {
                 Text("\(symbol.rotation)").font(.system(size:1)).opacity(0.01)
@@ -808,5 +826,39 @@ private struct NoteCard: View {
 }
 
 private struct Grid: View { var body: some View { Canvas { context, size in var path = Path(); for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }; for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }; context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1) } } }
+
+/// Categorised SF Symbols grid (BlockIcon.categories) for choosing a block's icon; pushed from the inspector.
+private struct IconPickerView: View {
+    @Binding var icon: String
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                ForEach(BlockIcon.categories, id: \.name) { category in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(category.name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 12)], spacing: 12) {
+                            ForEach(category.icons, id: \.self) { name in
+                                Button { icon = name; dismiss() } label: {
+                                    Image(systemName: name)
+                                        .font(.title2)
+                                        .frame(width: 48, height: 48)
+                                        .background(icon == name ? Color.accentColor.opacity(0.2) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(icon == name ? Color.accentColor : .clear, lineWidth: 2))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(name)
+                                .accessibilityIdentifier("icon-picker-\(name)")
+                                .accessibilityAddTraits(icon == name ? .isSelected : [])
+                            }
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("アイコンを選択")
+    }
+}
 
 private extension CGPoint { func distance(to other: CGPoint) -> CGFloat { hypot(x - other.x, y - other.y) } }

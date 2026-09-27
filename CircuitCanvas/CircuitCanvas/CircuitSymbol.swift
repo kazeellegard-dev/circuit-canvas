@@ -34,6 +34,19 @@ enum ResizableGeometry {
         return CGRect(x: center.x - 16 * k, y: center.y - 16 * k, width: 32 * k, height: 32 * k)
     }
 }
+/// Curated SF Symbols the user can pick for a block, grouped for the icon picker. Anyone editing this: keep the
+/// symbol names valid SF Symbols (the picker renders them with Image(systemName:)).
+enum BlockIcon {
+    static let categories: [(name: String, icons: [String])] = [
+        ("基板・部品", ["cpu","memorychip","antenna.radiowaves.left.and.right","wifi","network",
+                    "sensor.tag.radiowaves.forward","bolt.fill","bolt.batteryblock","speaker.wave.2.fill"]),
+        ("通信・接続", ["arrow.left.and.right","arrow.triangle.branch","point.3.connected.trianglepath.dotted","cable.connector"]),
+        ("筐体・機構", ["shippingbox","cube","gearshape.fill","fan.fill","thermometer"]),
+        ("表示・操作", ["display","switch.2","slider.horizontal.3","lightbulb.fill"]),
+        ("汎用図形", ["square.dashed","circle.dashed","triangle","hexagon","diamond"])
+    ]
+    static let all: [String] = categories.flatMap(\.icons)
+}
 /// Resizing of block-diagram symbols: the height is a multiple of 30pt (one left/right pin slot per 30pt,
 /// so a pin can always be added without overflowing) and the width moves in 30pt steps.
 enum BlockSize {
@@ -61,7 +74,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     case npn = "NPNトランジスタ", pnp = "PNPトランジスタ", nmos = "NチャネルMOSFET", pmos = "PチャネルMOSFET", opAmp = "オペアンプ"
     case andGate = "ANDゲート", orGate = "ORゲート", nandGate = "NANDゲート", norGate = "NORゲート", xorGate = "XORゲート", notGate = "NOTゲート"
     case relay = "リレー", connector = "コネクタ"
-    case converter = "DC/DC", mcu = "MCU", can = "CAN", sensor = "センサー", block = "汎用ブロック"
+    case block = "汎用ブロック"
     var id: Self { self }
     var category: SymbolCategory {
         switch self {
@@ -84,7 +97,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     }
     var pinSpecs: [Pin] {
         switch self {
-        case .converter, .mcu, .can, .sensor, .block:
+        case .block:
             [Self.pin("左ピン",-45,0,.left), Self.pin("右ピン",45,0,.right)]
         case .ground, .vcc:
             [Self.pin("左ピン",-30,0,.left)]
@@ -114,7 +127,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
             CGSize(width:100,height:100)
         case .connector: CGSize(width:100,height:200)
-        case .converter, .mcu, .can, .sensor, .block: CGSize(width:90,height:30)
+        case .block: CGSize(width:90,height:30)
         default: CGSize(width:100,height:50)
         }
     }
@@ -125,7 +138,7 @@ enum SymbolKind: String, CaseIterable, Identifiable {
         case .npn, .pnp, .nmos, .pmos, .opAmp, .andGate, .orGate, .nandGate, .norGate, .xorGate, .notGate, .relay:
             CGSize(width:60,height:60)
         case .connector: CGSize(width:60,height:120)
-        case .converter, .mcu, .can, .sensor, .block: CGSize(width:90,height:30)
+        case .block: CGSize(width:90,height:30)
         default: CGSize(width:60,height:30)
         }
     }
@@ -179,15 +192,8 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     var letter: String? {
         switch self { case .motor: "M"; case .voltmeter: "V"; case .ammeter: "A"; default: nil }
     }
-    var icon: String {
-        switch self {
-        case .converter: "bolt.fill"
-        case .mcu: "cpu"
-        case .can: "arrow.left.and.right"
-        case .sensor: "sensor.tag.radiowaves.forward"
-        default: "square.dashed"
-        }
-    }
+    /// Default icon for a newly placed generic block; the user can change it afterwards (SymbolItem.icon).
+    var icon: String { "square.dashed" }
 }
 
 /// Vector construction space is the kind's `designSize`; the view scales it to `frameSize`.
