@@ -1,0 +1,103 @@
+# テスト結果の要約（ゲート: xcodebuild test）
+
+- 判定: **成功**
+- 件数: 74 件（成功 74 / 失敗 0 / 再試行で成功した不安定なテスト 0）
+- テスト実行の時間: 565 秒（ビルドを含む全体: 568 秒）
+- 端末: iPad Pro 11-inch (M5) TEST (26.5)（並列なし）
+- xcodebuild の終了コード: 0
+
+## 遅いテスト（上位 10 件）
+
+| 秒 | テスト |
+|---|---|
+| 89.4 | `CircuitCanvasUITests/testCircuitCataloguePlacementKindsAndTerminals()` |
+| 47.7 | `CircuitCanvasUITests/testBlockPinAdditionAppearsOnEmptySlotsAndTheNewPinWorks()` |
+| 44.4 | `CircuitCanvasUITests/testBlockResizeHandlesSnappingLimitsWiresAndReset()` |
+| 37.7 | `CircuitCanvasUITests/testMultiTerminalWiringAdjacentPinsRotationAndMove()` |
+| 27.3 | `CircuitCanvasUITests/testNoteResizeHandlesSnappingAndMinimumSize()` |
+| 24.9 | `CircuitCanvasUITests/testCircuitWiringSelfRejectionMovementAndGroundDeletion()` |
+| 23.5 | `CircuitCanvasUITests/testCircuitRotationControlsPreserveCenterAndWiring()` |
+| 21.5 | `CircuitCanvasUITests/testShortHorizontalLineDragsAndCrossings()` |
+| 18.6 | `CircuitCanvasUITests/testGenericBlockCanBeRenamedAndGivenAnIconFromTheInspector()` |
+| 18.4 | `CircuitCanvasUITests/testNoteRelateButtonWorksWithoutOpeningTheInspector()` |
+
+UI テストの所要時間の合計: 542 秒（28 件）。 UI テストは、1 件ごとにアプリを起動し直すため、統合すると起動の回数が減る。
+
+## 全テスト
+
+| 結果 | 秒 | テスト |
+|---|---|---|
+| Passed | 3.8 | `CircuitCanvasUITests/testBlankCanvasDragCrossingLineRemainsPan()` |
+| Passed | 47.7 | `CircuitCanvasUITests/testBlockPinAdditionAppearsOnEmptySlotsAndTheNewPinWorks()` |
+| Passed | 44.4 | `CircuitCanvasUITests/testBlockResizeHandlesSnappingLimitsWiresAndReset()` |
+| Passed | 89.4 | `CircuitCanvasUITests/testCircuitCataloguePlacementKindsAndTerminals()` |
+| Passed | 23.5 | `CircuitCanvasUITests/testCircuitRotationControlsPreserveCenterAndWiring()` |
+| Passed | 24.9 | `CircuitCanvasUITests/testCircuitWiringSelfRejectionMovementAndGroundDeletion()` |
+| Passed | 6.6 | `CircuitCanvasUITests/testCloseSymbolsRetainMaximumAvailableLead()` |
+| Passed | 9.6 | `CircuitCanvasUITests/testDeletingNoteDoesNotCrash()` |
+| Passed | 10.4 | `CircuitCanvasUITests/testDeletingSymbolRemovesNewlyAddedWire()` |
+| Passed | 7.4 | `CircuitCanvasUITests/testDraggingOneSideOfAStepStraightensTheWire()` |
+| Passed | 5.7 | `CircuitCanvasUITests/testExperimentNoteCanBeDragged()` |
+| Passed | 18.6 | `CircuitCanvasUITests/testGenericBlockCanBeRenamedAndGivenAnIconFromTheInspector()` |
+| Passed | 8.7 | `CircuitCanvasUITests/testInspectorHasNoRotateOrRelateButtons()` |
+| Passed | 10.7 | `CircuitCanvasUITests/testJunctionsTrackSharedPinsAndSegmentDrags()` |
+| Passed | 37.7 | `CircuitCanvasUITests/testMultiTerminalWiringAdjacentPinsRotationAndMove()` |
+| Passed | 18.0 | `CircuitCanvasUITests/testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker()` |
+| Passed | 18.4 | `CircuitCanvasUITests/testNoteRelateButtonWorksWithoutOpeningTheInspector()` |
+| Passed | 27.3 | `CircuitCanvasUITests/testNoteResizeHandlesSnappingAndMinimumSize()` |
+| Passed | 15.3 | `CircuitCanvasUITests/testOperationHintStaysFixedDuringZoomAndPan()` |
+| Passed | 9.5 | `CircuitCanvasUITests/testPinCentersMatchAndWireEndpointsFollowBothDraggedSymbols()` |
+| Passed | 16.3 | `CircuitCanvasUITests/testRequestedRoutesAndSymbolMovementAvoidBodiesAndOverlaps()` |
+| Passed | 10.2 | `CircuitCanvasUITests/testSegmentDragKeepsEndpointsViewportCountAndManualPosition()` |
+| Passed | 4.8 | `CircuitCanvasUITests/testSegmentDragStopsAtBodyBoundary()` |
+| Passed | 21.5 | `CircuitCanvasUITests/testShortHorizontalLineDragsAndCrossings()` |
+| Passed | 15.0 | `CircuitCanvasUITests/testStartPinSelectionResetsAndIsReusedWithoutStrayWires()` |
+| Passed | 7.2 | `CircuitCanvasUITests/testTappingTheBackgroundWhilePickingARelateCornerCancelsInsteadOfLeavingTheHintStuck()` |
+| Passed | 16.2 | `CircuitCanvasUITests/testVerticalPowerSegmentDragBranchAndRotation()` |
+| Passed | 13.1 | `CircuitCanvasUITests/testWireToolConnectsPinsAndRejectsDuplicatesBothWays()` |
+| Passed | 0.0 | `CircuitSymbolTests/addPinIndicatorNeverOverlapsAPinOrAResizeHandleAtAnyZoom()` |
+| Passed | 0.0 | `CircuitSymbolTests/addedBlockPinsSitOnTheirRowAndLeadOutward()` |
+| Passed | 0.0 | `CircuitSymbolTests/blockPinSlotsCoverOneLeftAndRightPerThirtyPointRow()` |
+| Passed | 0.0 | `CircuitSymbolTests/blockPinsUseTheFirstRowSlotAndBodiesFollowTheSize()` |
+| Passed | 0.0 | `CircuitSymbolTests/blockSizesSnapToThirtyPointStepsWithinLimits()` |
+| Passed | 0.0 | `CircuitSymbolTests/catalogueCategoriesAndVectorGeometry()` |
+| Passed | 0.0 | `CircuitSymbolTests/defaultPowerOrientationsAndUprightLetters()` |
+| Passed | 0.0 | `CircuitSymbolTests/draggingACornerKeepsTheOppositeCornerFixed()` |
+| Passed | 0.0 | `CircuitSymbolTests/externalLeadsAreFifteenPointsExceptNarrowPlateSymbols()` |
+| Passed | 0.0 | `CircuitSymbolTests/minimumBlockHeightGrowsWithTheDeepestAddedPin()` |
+| Passed | 0.0 | `CircuitSymbolTests/multiTerminalPinLayoutsMatchTheSpecification()` |
+| Passed | 0.0 | `CircuitSymbolTests/multiTerminalShapesReachEveryPin()` |
+| Passed | 0.0 | `CircuitSymbolTests/pinsBodyAndOutwardDirectionsForEveryKindAndRotation()` |
+| Passed | 0.0 | `CircuitSymbolTests/plateSymbolsKeepTheirPlatesClose()` |
+| Passed | 0.0 | `CircuitSymbolTests/resizeHandlesAreFingerSizedAndClearOfPinsAtEveryZoom()` |
+| Passed | 0.0 | `CircuitSymbolTests/screenConstantGrowsBelowFullZoomAndNeverShrinksAboveIt()` |
+| Passed | 0.0 | `CircuitSymbolTests/twoTerminalAndSingleTerminalSymbolsKeepTheirOriginalPinOrder()` |
+| Passed | 0.0 | `CircuitSymbolTests/wireEndsFollowTheirOwnPinWhenNewPinsCoincideWithOldOnes()` |
+| Passed | 0.0 | `WireRoutingTests/aKeptWireThatNowOverlapsAManualRouteIsPlannedAgain()` |
+| Passed | 0.0 | `WireRoutingTests/aStraightenedManualRouteStillFollowsItsMovedEnds()` |
+| Passed | 0.0 | `WireRoutingTests/aStraightenedRouteHasNoZeroLengthOrCollinearSegments()` |
+| Passed | 0.0 | `WireRoutingTests/aWireThatABodyNowSitsOnIsRoutedAgainAndOthersStay()` |
+| Passed | 0.0 | `WireRoutingTests/backgroundHitResolutionRejectsBlankSpaceAndTerminalLeads()` |
+| Passed | 0.0 | `WireRoutingTests/closeBodiesUseHalfGapForLeadsAndClearance()` |
+| Passed | 0.0 | `WireRoutingTests/crossingTouchUsesPerpendicularMotionForReturnDrag()` |
+| Passed | 0.0 | `WireRoutingTests/crossingsExcludeCornersBranchesAndRecomputeAfterMovement()` |
+| Passed | 0.0 | `WireRoutingTests/draggingOneSideOfAStepOntoTheOtherMakesOneStraightSegment()` |
+| Passed | 0.0 | `WireRoutingTests/firstRoutingPlansEveryWireInOrderAndLaterRoutingKeepsUnrelatedOnes()` |
+| Passed | 0.8 | `WireRoutingTests/fuzzedMovesResizesRotationsAndDragsNeverProduceADiagonalWire(seed:)` |
+| Passed | 0.1 | `WireRoutingTests/initialAndRequestedRoutesAvoidBodiesAndOverlaps()` |
+| Passed | 0.0 | `WireRoutingTests/junctionsDeduplicateMultipleBranchesAndExcludePinsAndCrossings()` |
+| Passed | 0.0 | `WireRoutingTests/manualRoutesAreReattachedNotReplanned()` |
+| Passed | 0.0 | `WireRoutingTests/manualSegmentPositionSurvivesEndpointMovement()` |
+| Passed | 0.0 | `WireRoutingTests/overlapIsAllowedOnlyAlongTheTrunkOfASharedPin()` |
+| Passed | 0.0 | `WireRoutingTests/rerouteReplacesAKeptRouteThatIsNotOrthogonal()` |
+| Passed | 0.0 | `WireRoutingTests/rotatedPinsRouteOutwardAvoidBodiesAndShareOnlyTerminalTrunks()` |
+| Passed | 0.0 | `WireRoutingTests/routesThroughNarrowGapsStayDraggableAndStillAvoidBodies()` |
+| Passed | 0.0 | `WireRoutingTests/segmentDragIsPerpendicularAttachedAndCannotTunnelThroughBody()` |
+| Passed | 0.0 | `WireRoutingTests/shortHorizontalDragCreatesAndRemovesCrossingOnOtherWire()` |
+| Passed | 0.0 | `WireRoutingTests/shortHorizontalTouchChoosesVisibleLineAndMovesOnlyItsY()` |
+| Passed | 0.0 | `WireRoutingTests/snapReachesExactlyThirteenPointsAndNoFurther()` |
+| Passed | 0.0 | `WireRoutingTests/snappingNeverPullsASegmentThroughABody()` |
+| Passed | 0.0 | `WireRoutingTests/tightLayoutsStillDrawAnOrthogonalWire()` |
+| Passed | 0.0 | `WireRoutingTests/verticalTerminalManualDragAndReattachment()` |
+| Passed | 0.0 | `WireRoutingTests/wireIsStillDrawnWhenNoPlannedRouteExists()` |
+| Passed | 0.0 | `WireRoutingTests/wireLeavesTheFirstRowSlotOfATallBlockSideways()` |

@@ -235,6 +235,9 @@ final class CircuitCanvasUITests: XCTestCase {
             guard let value = canvas.value as? String, let after = value.range(of:"scale=") else { return nil }
             return Int(value[after.upperBound...].prefix { $0.isNumber })
         }
+        // The Int-rounded percentage above cannot tell an exact 1.0 from a near-miss, so also read the raw
+        // value setZoom(_:) assigns (Codex minor, 4E round 2).
+        func exactScale() -> Double? { Double(element(app,"zoom-scale-exact").value as? String ?? "") }
         XCTAssertEqual(scalePercent(),100)
         app.buttons["zoom-menu"].tap()
         for percent in [25,50,100,150,200] {
@@ -242,16 +245,54 @@ final class CircuitCanvasUITests: XCTestCase {
         }
         app.buttons["zoom-150"].tap()
         XCTAssertEqual(scalePercent(),150)
+        XCTAssertEqual(exactScale() ?? -1,1.5,accuracy:0.0001)
         // Coming from a non-100% state, selecting 100% must land exactly on it (not some pinch-drifted value).
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-100"].tap()
         XCTAssertEqual(scalePercent(),100)
+        XCTAssertEqual(exactScale() ?? -1,1,accuracy:0.0001)
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-25"].tap()
         XCTAssertEqual(scalePercent(),25)
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-200"].tap()
         XCTAssertEqual(scalePercent(),200)
+    }
+
+    @MainActor
+    func testZoomMenuKeepsTheViewportCenterEvenWhenAlreadyPannedNearTheEdge() throws {
+        let app = XCUIApplication(); app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        func viewport() -> [Double] { (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        // Full-precision offset/scale (not the Int-truncated ones in circuit-canvas's own -value), since a
+        // low zoom-out turns even 1pt of truncation into several pt of canvas-coordinate error.
+        func offsetAndScale() -> (x: Double, y: Double, scale: Double) {
+            let parts = (element(app,"canvas-offset-exact").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+            let scale = Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan
+            return (parts.first ?? .nan, parts.count > 1 ? parts[1] : .nan, scale)
+        }
+        func canvasCenter() -> CGPoint {
+            let v = viewport(), o = offsetAndScale()
+            return CGPoint(x: (v[0]/2 - o.x)/o.scale, y: (v[1]/2 - o.y)/o.scale)
+        }
+        // Pan (in two steps, each a safe on-screen distance) far enough that boundedCanvasOffset's 200pt edge
+        // margin is already in play for a plain pan - exactly the situation the fixed setZoom(_:) must not
+        // disturb (Codex major, 4E round 1).
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:291,dy:473))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:300,dy:200)))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:300,dy:200)))
+        let before = canvasCenter()
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-200"].tap()
+        XCTAssertEqual(canvasCenter().x,before.x,accuracy:1,"zooming must not move the point that was centered")
+        XCTAssertEqual(canvasCenter().y,before.y,accuracy:1)
+        // And back down, from a now-panned, zoomed-in state.
+        let midway = canvasCenter()
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-50"].tap()
+        XCTAssertEqual(canvasCenter().x,midway.x,accuracy:1)
+        XCTAssertEqual(canvasCenter().y,midway.y,accuracy:1)
     }
 
     @MainActor

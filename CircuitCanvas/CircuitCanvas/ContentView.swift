@@ -249,6 +249,27 @@ struct ContentView: View {
                     .padding(12)
                     .allowsHitTesting(false)
             }
+            .overlay(alignment: .bottomTrailing) {
+                // Exposes exactly the state setZoom(_:) itself uses, so a test can verify the viewport's
+                // center canvas point precisely (not just via the Int-rounded scale in -value above) and
+                // confirm it survives a zoom-menu selection even when already panned near boundedCanvasOffset's
+                // edge margin (Codex major, 4E round 1).
+                Text("viewportSize").font(.system(size:1)).opacity(0.01)
+                    .accessibilityIdentifier("viewport-size")
+                    .accessibilityValue("\(Int(viewportSize.width)),\(Int(viewportSize.height))")
+                    .allowsHitTesting(false)
+                Text("zoomScaleExact").font(.system(size:1)).opacity(0.01)
+                    .accessibilityIdentifier("zoom-scale-exact")
+                    .accessibilityValue(String(format:"%.6f",canvasScale))
+                    .allowsHitTesting(false)
+                // The Int-truncated offsetX/offsetY in -value (above the canvas itself) lose up to 1pt, which
+                // a low zoom-out (e.g. 25%) turns into several pt of canvas-coordinate error - too coarse for
+                // checking the viewport center precisely.
+                Text("canvasOffsetExact").font(.system(size:1)).opacity(0.01)
+                    .accessibilityIdentifier("canvas-offset-exact")
+                    .accessibilityValue(String(format:"%.3f,%.3f",canvasOffset.width,canvasOffset.height))
+                    .allowsHitTesting(false)
+            }
             .onAppear { viewportSize = proxy.size }
             .onChange(of: proxy.size) { _, newValue in viewportSize = newValue }
         }
@@ -694,16 +715,14 @@ struct ContentView: View {
     }
     /// Applies one of the zoom menu's fixed percentages, keeping whatever canvas point is currently at the
     /// center of the visible viewport centered there (rather than resetting pan, or anchoring on the
-    /// canvas's own top-left as the old single reset button did).
+    /// canvas's own top-left as the old single reset button did). Deliberately not run through
+    /// boundedCanvasOffset: that keeps a 200pt margin of canvas on screen at all times, which would move the
+    /// center whenever the current pan is already using part of that margin (Codex major, 4E round 1) - here
+    /// the user picked an exact percentage, so preserving the center takes priority over that safety margin.
     private func setZoom(_ scale: CGFloat) {
         guard viewportSize != .zero else { canvasScale = scale; canvasScaleOrigin = scale; return }
-        let center = CGPoint(x: viewportSize.width/2, y: viewportSize.height/2)
-        let canvasCenter = canvasPoint(from: center)
+        canvasOffset = CanvasZoom.offset(oldOffset: canvasOffset, oldScale: canvasScale, newScale: scale, viewportSize: viewportSize)
         canvasScale = scale; canvasScaleOrigin = scale
-        canvasOffset = boundedCanvasOffset(
-            CGSize(width: center.x - canvasCenter.x*scale, height: center.y - canvasCenter.y*scale),
-            in: viewportSize
-        )
         canvasPanOrigin = canvasOffset
     }
     private func move(symbolID: UUID, by translation: CGSize) {

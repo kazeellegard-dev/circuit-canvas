@@ -34,6 +34,16 @@ enum ResizableGeometry {
         return CGRect(x: center.x - 16 * k, y: center.y - 16 * k, width: 32 * k, height: 32 * k)
     }
 }
+/// The pan offset that keeps a fixed canvas point (by default, the viewport's own center) at the same
+/// screen position across a scale change - used by the zoom menu (4E), which changes `canvasScale` directly
+/// rather than through a pinch, and must not otherwise disturb what is currently on screen.
+enum CanvasZoom {
+    static func offset(oldOffset: CGSize, oldScale: CGFloat, newScale: CGFloat, viewportSize: CGSize) -> CGSize {
+        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let canvasCenter = CGPoint(x: (center.x - oldOffset.width) / oldScale, y: (center.y - oldOffset.height) / oldScale)
+        return CGSize(width: center.x - canvasCenter.x * newScale, height: center.y - canvasCenter.y * newScale)
+    }
+}
 /// Curated SF Symbols the user can pick for a block, grouped for the icon picker. Anyone editing this: keep the
 /// symbol names valid SF Symbols (the picker renders them with Image(systemName:)).
 enum BlockIcon {

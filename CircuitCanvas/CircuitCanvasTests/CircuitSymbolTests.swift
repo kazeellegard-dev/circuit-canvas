@@ -288,6 +288,32 @@ struct CircuitSymbolTests {
         #expect(ResizableGeometry.screenConstant(24, scale: 0.5) == 48)
     }
 
+    /// The zoom menu (4E) must keep the same canvas point centered in the viewport across a scale change,
+    /// even when the current pan is already using part of boundedCanvasOffset's edge margin - which is
+    /// exactly why this must NOT be run through boundedCanvasOffset (Codex major, 4E round 1: applying that
+    /// clamp moved the center whenever the pan was already near an edge).
+    @Test func canvasZoomKeepsTheViewportCenterOnTheSameCanvasPointEvenWhenPannedNearAnEdge() {
+        let viewport = CGSize(width: 1000, height: 800)
+        func canvasCenter(_ offset: CGSize, _ scale: CGFloat) -> CGPoint {
+            CGPoint(x: (viewport.width/2 - offset.width) / scale, y: (viewport.height/2 - offset.height) / scale)
+        }
+        // Codex's own example: offsetX 800 at scale 1 puts the center at canvas x = -300 - already past what
+        // boundedCanvasOffset would allow if it were (wrongly) reapplied for a scale-only change.
+        let oldOffset = CGSize(width: 800, height: 300), oldScale: CGFloat = 1, newScale: CGFloat = 2
+        let newOffset = CanvasZoom.offset(oldOffset: oldOffset, oldScale: oldScale, newScale: newScale, viewportSize: viewport)
+        #expect(abs(newOffset.width - 1100) < 0.001)
+        let before = canvasCenter(oldOffset, oldScale), after = canvasCenter(newOffset, newScale)
+        #expect(abs(before.x - after.x) < 0.001)
+        #expect(abs(before.y - after.y) < 0.001)
+        // Also holds shrinking, and from/to fractional (pinch-reached) scales, not just menu presets.
+        for (o,s,n) in [(CGSize(width:-400,height:-250),CGFloat(1.5),CGFloat(0.5)),
+                        (CGSize(width:120,height:-80),CGFloat(0.73),CGFloat(1))] {
+            let newO = CanvasZoom.offset(oldOffset:o, oldScale:s, newScale:n, viewportSize:viewport)
+            let b = canvasCenter(o,s), a = canvasCenter(newO,n)
+            #expect(abs(b.x - a.x) < 0.001); #expect(abs(b.y - a.y) < 0.001)
+        }
+    }
+
     // MARK: block pin addition (3C)
 
     @Test func blockPinSlotsCoverOneLeftAndRightPerThirtyPointRow() {
