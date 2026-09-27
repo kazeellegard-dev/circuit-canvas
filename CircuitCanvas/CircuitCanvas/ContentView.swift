@@ -116,6 +116,7 @@ struct ContentView: View {
     @State private var canvasPanOrigin = CGSize.zero
     @State private var canvasScale: CGFloat = 1
     @State private var canvasScaleOrigin: CGFloat = 1
+    @State private var viewportSize: CGSize = .zero   // kept up to date by `editor`'s GeometryReader, for the zoom menu
     @State private var showLibrary = false
     @State private var showInspector = false
     @State private var symbols: [SymbolItem] = [
@@ -151,7 +152,15 @@ struct ContentView: View {
                     Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
                     Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol }
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
-                    Button("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right") { resetCanvasViewport() }
+                    Menu {
+                        ForEach([25,50,100,150,200], id: \.self) { percent in
+                            Button("\(percent)%") { setZoom(CGFloat(percent)/100) }
+                                .accessibilityIdentifier("zoom-\(percent)")
+                        }
+                    } label: {
+                        Label("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .accessibilityIdentifier("zoom-menu")
                     Button("確認", systemImage: "slider.horizontal.3") { showInspector = true }
                 }
             }
@@ -240,6 +249,8 @@ struct ContentView: View {
                     .padding(12)
                     .allowsHitTesting(false)
             }
+            .onAppear { viewportSize = proxy.size }
+            .onChange(of: proxy.size) { _, newValue in viewportSize = newValue }
         }
     }
 
@@ -681,7 +692,20 @@ struct ContentView: View {
             height: min(max(proposed.height, minimumVisible - scaledHeight), viewportSize.height - minimumVisible)
         )
     }
-    private func resetCanvasViewport() { canvasOffset = .zero; canvasPanOrigin = .zero; canvasScale = 1; canvasScaleOrigin = 1 }
+    /// Applies one of the zoom menu's fixed percentages, keeping whatever canvas point is currently at the
+    /// center of the visible viewport centered there (rather than resetting pan, or anchoring on the
+    /// canvas's own top-left as the old single reset button did).
+    private func setZoom(_ scale: CGFloat) {
+        guard viewportSize != .zero else { canvasScale = scale; canvasScaleOrigin = scale; return }
+        let center = CGPoint(x: viewportSize.width/2, y: viewportSize.height/2)
+        let canvasCenter = canvasPoint(from: center)
+        canvasScale = scale; canvasScaleOrigin = scale
+        canvasOffset = boundedCanvasOffset(
+            CGSize(width: center.x - canvasCenter.x*scale, height: center.y - canvasCenter.y*scale),
+            in: viewportSize
+        )
+        canvasPanOrigin = canvasOffset
+    }
     private func move(symbolID: UUID, by translation: CGSize) {
         guard let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
         let origin = dragOrigins[symbolID] ?? symbols[index].position

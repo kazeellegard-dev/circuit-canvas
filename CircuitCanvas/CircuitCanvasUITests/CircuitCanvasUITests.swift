@@ -227,6 +227,34 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testZoomMenuOffersFixedPercentagesAndAppliesThemExactly() throws {
+        let app = XCUIApplication(); app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        func scalePercent() -> Int? {
+            guard let value = canvas.value as? String, let after = value.range(of:"scale=") else { return nil }
+            return Int(value[after.upperBound...].prefix { $0.isNumber })
+        }
+        XCTAssertEqual(scalePercent(),100)
+        app.buttons["zoom-menu"].tap()
+        for percent in [25,50,100,150,200] {
+            XCTAssertTrue(app.buttons["zoom-\(percent)"].waitForExistence(timeout:2),"the menu must offer \(percent)%")
+        }
+        app.buttons["zoom-150"].tap()
+        XCTAssertEqual(scalePercent(),150)
+        // Coming from a non-100% state, selecting 100% must land exactly on it (not some pinch-drifted value).
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-100"].tap()
+        XCTAssertEqual(scalePercent(),100)
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-25"].tap()
+        XCTAssertEqual(scalePercent(),25)
+        app.buttons["zoom-menu"].tap()
+        app.buttons["zoom-200"].tap()
+        XCTAssertEqual(scalePercent(),200)
+    }
+
+    @MainActor
     func testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker() throws {
         let app = XCUIApplication(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
