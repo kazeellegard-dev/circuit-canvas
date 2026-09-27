@@ -4,6 +4,7 @@
 # 使い方:
 #   scripts/review-loop.sh [--base REV] [--head REV] [--task TASK_FILE] [--skip-gate]
 #                          [--review-on-fail] [--allow-dirty] [--dry-run]
+#                          [--only-testing NAME]...
 #
 #   --base REV         レビュー対象の起点（既定: 前回レビューした HEAD。なければ HEAD~1）
 #   --head REV         レビュー対象の終点（既定: HEAD）
@@ -13,6 +14,9 @@
 #   --review-on-fail   テストが失敗しても、Codex にレビューさせる（既定: 失敗したら、レビューせずに終了）
 #   --allow-dirty      未コミットの変更があっても実行する（テストは、作業ツリーに対して動く）
 #   --dry-run          テストと Codex を実行しない（材料の作成までを確認する）
+#   --only-testing N   xcodebuild の -only-testing:N をそのまま渡す（複数指定可）。指定すると、フルスイート
+#                       ではなく、そのテストだけを実行する（時短用。全体の回帰は、最終確認で別途フル実行する）。
+#                       ゲートの要約・Codex への材料に「一部のみ実行」である旨を明記する。
 #
 # 出力:
 #   CircuitCanvas/docs/qa/loop/runs/<日時>-review/   材料（diff・要約・プロンプト・review.json など）
@@ -39,6 +43,7 @@ LAST_HEAD_FILE="$LOOP_DIR/last-review-head"
 
 BASE=""; HEAD_REV="HEAD"; TASK_FILE=""
 SKIP_GATE=0; REVIEW_ON_FAIL=0; ALLOW_DIRTY=0; DRY_RUN=0; GATE_XCRESULT=""
+ONLY_TESTING=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,7 +55,8 @@ while [[ $# -gt 0 ]]; do
     --review-on-fail) REVIEW_ON_FAIL=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --dry-run) DRY_RUN=1 ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    --only-testing) ONLY_TESTING+=("$2"); shift ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "不明なオプション: $1" >&2; exit 2 ;;
   esac
   shift
@@ -93,7 +99,15 @@ if [[ $DRY_RUN -eq 1 ]]; then
 else
   if [[ $SKIP_GATE -eq 0 ]]; then
     GATE_XCRESULT="$RUN_DIR/gate.xcresult"
-    log "ゲート: xcodebuild test（テスト専用の端末・並列なし・失敗は 1 回だけ再試行）"
+    ONLY_TESTING_ARGS=()
+    for t in "${ONLY_TESTING[@]:-}"; do
+      [[ -n "$t" ]] && ONLY_TESTING_ARGS+=("-only-testing:$t")
+    done
+    if [[ ${#ONLY_TESTING_ARGS[@]} -gt 0 ]]; then
+      log "ゲート: xcodebuild test（一部のみ実行 - 時短。全体の回帰は最終確認で別途）: ${ONLY_TESTING[*]}"
+    else
+      log "ゲート: xcodebuild test（テスト専用の端末・並列なし・失敗は 1 回だけ再試行）"
+    fi
     START=$(date +%s); GATE_EXIT=0
     # 端末を起動しきってから始める。起動直後は、テストランナーの起動が "Busy" で拒否されることがある。
     run_gate() {
@@ -103,6 +117,7 @@ else
       GATE_EXIT=0
       xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" \
         -parallel-testing-enabled NO -retry-tests-on-failure -test-iterations 2 \
+        "${ONLY_TESTING_ARGS[@]}" \
         -resultBundlePath "$GATE_XCRESULT" > "$RUN_DIR/gate.log" 2>&1 || GATE_EXIT=$?
     }
     run_gate
@@ -155,6 +170,12 @@ PROMPT="$RUN_DIR/review-prompt.md"
   echo "- 材料のディレクトリ: $RUN_DIR"
   echo "  - commits.txt / diff.patch / tests-diff.patch / gate-summary.md"
   echo "- テストの判定: $GATE_STATUS"
+  if [[ ${#ONLY_TESTING[@]} -gt 0 ]]; then
+    echo "- ゲートの範囲: **一部のみ実行**（時短のため、以下のテストだけ）。それ以外の既存テストは、直近複数回のフル実行で成功しており、今回は実行していない。全体の回帰は、最終確認で別途フル実行する。"
+    for t in "${ONLY_TESTING[@]}"; do echo "  - $t"; done
+  else
+    echo "- ゲートの範囲: フルスイート"
+  fi
   if [[ -n "$TASK_FILE" ]]; then
     echo
     echo "# タスク（要件と受け入れ条件）"
