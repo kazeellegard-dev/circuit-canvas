@@ -463,6 +463,69 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testEditModeBlocksPlacingASymbolFromTheLibrary() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
+        // The library button itself must be disabled - not just the toolbar's own "＋シンボル" - so a
+        // library tap followed by a canvas tap cannot place anything either (Codex major, 4C round 1).
+        XCTAssertFalse(app.buttons["library-汎用ブロック"].isEnabled)
+        app.buttons["library-汎用ブロック"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:600,dy:550)).tap()
+        XCTAssertFalse(element(app,"symbol-汎用ブロック").exists,"nothing must have been placed while in edit mode")
+    }
+
+    @MainActor
+    func testEditModeWireDeletionRemovesOnlyTheTappedSegmentAndKeepsTheRest() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
+
+        // Every segment of every current wire, as an unordered set of endpoint pairs - independent of which
+        // wire index they end up under (deleting a middle segment appends the two remaining sides as new
+        // wires at the end of the array, per deleteWireSegment).
+        func allSegments() -> Set<[CGPoint]> {
+            var result = Set<[CGPoint]>(); var i = 0
+            while element(app,"wire-\(i)").exists {
+                let points = routePoints(app,i)
+                for s in 0..<max(0,points.count-1) { result.insert([points[s],points[s+1]]) }
+                i += 1
+            }
+            return result
+        }
+        func deleteOneSegmentAndVerify() {
+            let before = allSegments()
+            // Pick whichever current wire has the most segments, and an interior one of its segments if it
+            // has one - so this exercises a middle-segment split when the layout offers one, not just the
+            // trivial single-segment case (Codex major, 4C round 1: "先頭・末尾・中間・唯一の区間" coverage).
+            var wireIndex = 0, segmentCount = 0
+            var i = 0
+            while element(app,"wire-\(i)").exists {
+                let c = routePoints(app,i).count - 1
+                if c > segmentCount { segmentCount = c; wireIndex = i }
+                i += 1
+            }
+            XCTAssertGreaterThan(segmentCount,0,"there must be a wire left to delete a segment from")
+            let targetSegment = segmentCount > 2 ? 1 : 0
+            let points = routePoints(app,wireIndex)
+            let removed = [points[targetSegment],points[targetSegment+1]]
+            XCTAssertTrue(before.contains(removed))
+
+            element(app,"edit-delete-wire-\(wireIndex)-segment-\(targetSegment)").tap()
+            XCTAssertFalse(app.staticTexts["削除しますか？"].exists,"wires need no confirmation")
+
+            let after = allSegments()
+            XCTAssertFalse(after.contains(removed),"the tapped segment must be gone")
+            XCTAssertEqual(before.subtracting([removed]),after,"every other segment (on this wire and every other) must be unchanged")
+        }
+        // Once, then again on whatever is left (continued deletion without leaving edit mode).
+        deleteOneSegmentAndVerify()
+        deleteOneSegmentAndVerify()
+    }
+
+    @MainActor
     func testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker() throws {
         let app = XCUIApplication(); app.launch()
         let note = element(app,"experiment-note-R12を変更")

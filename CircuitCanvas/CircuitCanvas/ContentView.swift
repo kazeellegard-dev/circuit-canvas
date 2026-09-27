@@ -284,6 +284,7 @@ struct ContentView: View {
                             .contentShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
+                        .disabled(editMode)
                         .accessibilityLabel("\(kind.rawValue)を配置")
                         .accessibilityIdentifier("library-\(kind.rawValue)")
                     }
@@ -563,7 +564,15 @@ struct ContentView: View {
                                 }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
                         )
-                        .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; linkingNote = note.id } }
+                        .contextMenu {
+                            // None of this while in edit mode: it would set selectedNote/linkingNote behind
+                            // the back of the guard on NoteCard's own tap, showing the relate-corner picker
+                            // right alongside the ✗ badges (Codex minor, 4C round 1).
+                            if !editMode {
+                                Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }
+                                Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; linkingNote = note.id }
+                            }
+                        }
                     if editMode {
                         let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
                         let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
@@ -643,6 +652,7 @@ struct ContentView: View {
                 // than falling through to deselect and leaving linkingNote (and its hint) dangling (Codex
                 // minor, 4A round 1).
                 else if linkingNote != nil { linkingNote = nil }
+                else if editMode { selectedNote = nil; selectedSymbol = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
