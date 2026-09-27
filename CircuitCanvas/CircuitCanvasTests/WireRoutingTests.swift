@@ -441,4 +441,118 @@ struct WireRoutingTests {
         let plain = WireRouting.moved(path,segment:1,delta:200,bodies:bodies)
         #expect(WireRouting.isClear(plain,bodies:bodies) && plain[1].x == 100)
     }
+
+    // MARK: fuzzing the production algorithm (move / resize / rotate / drag) for a stray diagonal wire
+
+    /// Mirrors ContentView's own state machine (SymbolItem-like blocks/circuit symbols, WireItem-like wires) using
+    /// only the public WireRouting / SymbolKind API - the same calls ContentView.move, .rotateSymbol,
+    /// .applyBlockGeometry and .updateSegmentDrag make - so a bug in that combination shows up here too.
+    private struct FuzzWire { var start: CGPoint; var end: CGPoint; var manual = false; var manualPoints: [CGPoint] = []; var points: [CGPoint] = [] }
+    private struct FuzzSymbol { var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize?
+        var pins: [CGPoint] { kind.pins(at:position,rotation:rotation,size:size) }
+        var body: CGRect { kind.body(at:position,rotation:rotation,size:size) }
+    }
+
+    @Test func fuzzedMovesResizesRotationsAndDragsNeverProduceADiagonalWire() {
+        var rng = SystemRandomNumberGenerator()
+        var symbols = [
+            FuzzSymbol(kind:.mcu,position:p(300,300),rotation:0,size:BlockSize.standard),
+            FuzzSymbol(kind:.mcu,position:p(700,300),rotation:0,size:BlockSize.standard),
+            FuzzSymbol(kind:.resistor,position:p(500,600),rotation:0,size:nil),
+            FuzzSymbol(kind:.npn,position:p(300,600),rotation:0,size:nil)
+        ]
+        var wires = [
+            FuzzWire(start:symbols[0].pins[1],end:symbols[2].pins[0]),
+            FuzzWire(start:symbols[2].pins[1],end:symbols[1].pins[0]),
+            FuzzWire(start:symbols[3].pins[0],end:symbols[1].pins[1])
+        ]
+        func bodies() -> [CGRect] { symbols.map(\.body) }
+        func margins() -> [CGFloat?] { symbols.map { $0.kind.isBlock ? nil : WireRouting.symbolLead } }
+        func direction(at pin: CGPoint) -> WireRouting.Direction? {
+            for symbol in symbols where !symbol.kind.isBlock {
+                if let i = symbol.pins.firstIndex(where:{ hypot($0.x-pin.x,$0.y-pin.y) < 1 }) { return symbol.kind.direction(for:i,rotation:symbol.rotation) }
+            }
+            return nil
+        }
+        func reroute() {
+            let planned = WireRouting.reroute(wires.map { .init(start:$0.start,end:$0.end,startDirection:direction(at:$0.start),endDirection:direction(at:$0.end),
+                                                                  manual:$0.manual,manualPoints:$0.manualPoints,points:$0.points) },
+                                              bodies:bodies(),margins:margins())
+            for i in wires.indices { wires[i].points = planned[i] }
+        }
+        func assertOrthogonal(_ context: String) {
+            for (i,wire) in wires.enumerated() {
+                #expect(wire.points.count >= 2, "\(context): wire \(i) has no route")
+                guard wire.points.count >= 2 else { continue }
+                #expect(wire.points.first == wire.start && wire.points.last == wire.end, "\(context): wire \(i) detached")
+                for (a,b) in WireRouting.segments(wire.points) {
+                    #expect(a.x == b.x || a.y == b.y, "\(context): wire \(i) has a diagonal segment \(a)->\(b), full path \(wire.points)")
+                }
+            }
+        }
+        func moveSymbol(_ i: Int, by translation: CGSize) {
+            let old = symbols[i].pins
+            symbols[i].position = p(symbols[i].position.x+translation.width,symbols[i].position.y+translation.height)
+            let new = symbols[i].pins
+            for j in wires.indices {
+                if let point = SymbolKind.remapped(wires[j].start,from:old,to:new) { wires[j].start = point }
+                if let point = SymbolKind.remapped(wires[j].end,from:old,to:new) { wires[j].end = point }
+            }
+        }
+        func resizeSymbol(_ i: Int, sx: CGFloat, sy: CGFloat, translation: CGSize) {
+            guard symbols[i].kind.isBlock, let size = symbols[i].size else { return }
+            let old = symbols[i].pins
+            let result = BlockSize.resized(center:symbols[i].position,size:size,sx:sx,sy:sy,translation:translation)
+            symbols[i].position = result.center; symbols[i].size = result.size
+            let new = symbols[i].pins
+            for j in wires.indices {
+                if let point = SymbolKind.remapped(wires[j].start,from:old,to:new) { wires[j].start = point }
+                if let point = SymbolKind.remapped(wires[j].end,from:old,to:new) { wires[j].end = point }
+            }
+        }
+        func rotateSymbol(_ i: Int) {
+            guard !symbols[i].kind.isBlock else { return }
+            let old = symbols[i].pins
+            symbols[i].rotation = (symbols[i].rotation+90)%360
+            let new = symbols[i].pins
+            for j in wires.indices {
+                if let point = SymbolKind.remapped(wires[j].start,from:old,to:new) { wires[j].start = point; wires[j].manual = false }
+                if let point = SymbolKind.remapped(wires[j].end,from:old,to:new) { wires[j].end = point; wires[j].manual = false }
+            }
+        }
+        func dragSegment(_ wireIndex: Int, delta: CGFloat) {
+            guard wires[wireIndex].points.count > 3 else { return }
+            let segment = Int.random(in:1..<(wires[wireIndex].points.count-2),using:&rng)
+            let lead = max(direction(at:wires[wireIndex].start) != nil ? WireRouting.symbolLead : 0,
+                           direction(at:wires[wireIndex].end) != nil ? WireRouting.symbolLead : 0)
+            wires[wireIndex].points = WireRouting.moved(wires[wireIndex].points,segment:segment,delta:delta,bodies:bodies(),minimumTerminalLead:lead)
+            wires[wireIndex].manual = true
+            wires[wireIndex].manualPoints = wires[wireIndex].points
+        }
+        reroute(); assertOrthogonal("initial")
+        for step in 0..<300 {
+            let symbolIndex = Int.random(in:0..<symbols.count,using:&rng)
+            switch Int.random(in:0..<4,using:&rng) {
+            case 0: moveSymbol(symbolIndex,by:CGSize(width:CGFloat(Int.random(in:-80...80,using:&rng)),height:CGFloat(Int.random(in:-80...80,using:&rng))))
+            case 1: resizeSymbol(symbolIndex,sx:[-1.0,1.0].randomElement(using:&rng)!,sy:[-1.0,1.0].randomElement(using:&rng)!,
+                                 translation:CGSize(width:CGFloat(Int.random(in:-90...90,using:&rng)),height:CGFloat(Int.random(in:-90...90,using:&rng))))
+            case 2: rotateSymbol(symbolIndex)
+            default:
+                if !wires.isEmpty { dragSegment(Int.random(in:0..<wires.count,using:&rng),delta:CGFloat(Int.random(in:-60...60,using:&rng))) }
+            }
+            reroute()
+            assertOrthogonal("step \(step)")
+        }
+    }
+
+    /// Defence in depth: reroute must never keep a stale route that is not orthogonal, even if something upstream
+    /// produced one - it should replan it instead of perpetuating it forever.
+    @Test func rerouteReplacesAKeptRouteThatIsNotOrthogonal() {
+        // Simulate a stray diagonal that somehow ended up stored (pins not aligned on either axis).
+        let wire = WireRouting.Wire(start:p(0,0),end:p(200,150),points:[p(0,0),p(200,150)])
+        #expect(!WireRouting.isOrthogonal(wire.points))
+        let result = WireRouting.reroute([wire],bodies:[],margins:[nil])
+        #expect(WireRouting.isOrthogonal(result[0]))
+        #expect(result[0].first == wire.start && result[0].last == wire.end)
+    }
 }

@@ -327,6 +327,12 @@ enum WireRouting {
     static func isClear(_ path: [CGPoint], bodies: [CGRect]) -> Bool {
         !segments(path).contains { a, b in bodies.contains { intersectsInterior(a, b, $0) } }
     }
+    /// Every segment horizontal or vertical. `intersectsInterior`/`isClear` assume this and cannot reliably
+    /// judge a diagonal segment, so `reroute` must never keep a route that fails this - as a defence beyond
+    /// the fact that every route-producing function here is built to keep it true.
+    static func isOrthogonal(_ path: [CGPoint]) -> Bool {
+        segments(path).allSatisfy { a, b in a.x == b.x || a.y == b.y }
+    }
     /// Recomputes only what has to change. A wire keeps its current route while it still joins its two pins
     /// and does not run through a body; only wires attached to something that moved (or that a body now sits on)
     /// are routed again, around the kept ones. Rerouting everything on every change made unrelated wires jump:
@@ -337,7 +343,7 @@ enum WireRouting {
         for (i, wire) in wires.enumerated() {
             if wire.manual { result[i] = reattach(wire.manualPoints, start: wire.start, end: wire.end) }
             else if wire.points.count < 2 || wire.points.first != wire.start || wire.points.last != wire.end
-                        || !isClear(wire.points, bodies: bodies) { pending.append(i) }
+                        || !isOrthogonal(wire.points) || !isClear(wire.points, bodies: bodies) { pending.append(i) }
         }
         // A hand-placed route that was reattached may now lie along a kept wire: plan that wire again.
         let manualPaths = wires.indices.filter { wires[$0].manual }.map { result[$0] }
