@@ -453,8 +453,19 @@ struct WireRoutingTests {
         var body: CGRect { kind.body(at:position,rotation:rotation,size:size) }
     }
 
-    @Test func fuzzedMovesResizesRotationsAndDragsNeverProduceADiagonalWire() {
-        var rng = SystemRandomNumberGenerator()
+    /// A small seedable generator so a failure is reproducible: rerun with the seed printed in the failure message.
+    private struct SeededGenerator: RandomNumberGenerator {
+        var state: UInt64
+        init(seed: UInt64) { state = seed == 0 ? 0xdead_beef : seed }
+        mutating func next() -> UInt64 {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17
+            return state
+        }
+    }
+
+    @Test(arguments: [UInt64(1), 2, 3, 42, 12345])
+    func fuzzedMovesResizesRotationsAndDragsNeverProduceADiagonalWire(seed: UInt64) {
+        var rng = SeededGenerator(seed: seed)
         var symbols = [
             FuzzSymbol(kind:.mcu,position:p(300,300),rotation:0,size:BlockSize.standard),
             FuzzSymbol(kind:.mcu,position:p(700,300),rotation:0,size:BlockSize.standard),
@@ -482,11 +493,11 @@ struct WireRoutingTests {
         }
         func assertOrthogonal(_ context: String) {
             for (i,wire) in wires.enumerated() {
-                #expect(wire.points.count >= 2, "\(context): wire \(i) has no route")
+                #expect(wire.points.count >= 2, "seed \(seed), \(context): wire \(i) has no route")
                 guard wire.points.count >= 2 else { continue }
-                #expect(wire.points.first == wire.start && wire.points.last == wire.end, "\(context): wire \(i) detached")
+                #expect(wire.points.first == wire.start && wire.points.last == wire.end, "seed \(seed), \(context): wire \(i) detached")
                 for (a,b) in WireRouting.segments(wire.points) {
-                    #expect(a.x == b.x || a.y == b.y, "\(context): wire \(i) has a diagonal segment \(a)->\(b), full path \(wire.points)")
+                    #expect(a.x == b.x || a.y == b.y, "seed \(seed), \(context): wire \(i) has a diagonal segment \(a)->\(b), full path \(wire.points)")
                 }
             }
         }
@@ -529,7 +540,7 @@ struct WireRoutingTests {
             wires[wireIndex].manual = true
             wires[wireIndex].manualPoints = wires[wireIndex].points
         }
-        reroute(); assertOrthogonal("initial")
+        reroute(); assertOrthogonal("seed \(seed), initial")
         for step in 0..<300 {
             let symbolIndex = Int.random(in:0..<symbols.count,using:&rng)
             switch Int.random(in:0..<4,using:&rng) {
@@ -541,7 +552,7 @@ struct WireRoutingTests {
                 if !wires.isEmpty { dragSegment(Int.random(in:0..<wires.count,using:&rng),delta:CGFloat(Int.random(in:-60...60,using:&rng))) }
             }
             reroute()
-            assertOrthogonal("step \(step)")
+            assertOrthogonal("seed \(seed), step \(step)")
         }
     }
 
