@@ -406,6 +406,63 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testEditModeGraysOutOtherToolsAndDeletesSymbolsNotesAndWireSegments() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        XCTAssertFalse(element(app,"edit-mode-badge").exists)
+        XCTAssertFalse(element(app,"symbol-24 V → 5 V-edit-delete").exists)
+
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
+        for label in ["選択","配線","＋シンボル","＋メモ","確認","設定"] {
+            XCTAssertFalse(app.buttons[label].isEnabled,"\(label) must be greyed out in edit mode")
+        }
+        XCTAssertTrue(app.buttons["zoom-menu"].exists && !app.buttons["zoom-menu"].isEnabled)
+        XCTAssertTrue(app.buttons["edit-mode-toggle"].isEnabled,"the edit button itself stays tappable")
+
+        // Wires: tap-to-delete, no confirmation, and it takes effect. "確認" (the inspector, where the wire
+        // count lives) is greyed out in edit mode, so the effect is checked directly on the canvas instead:
+        // either wire-0 is gone outright, or its points changed - deleting a segment may drop the whole wire
+        // or leave a shortened/disconnected fragment, per the task.
+        let before0 = routePoints(app,0)
+        XCTAssertTrue(element(app,"edit-delete-wire-0-segment-0").waitForExistence(timeout:2))
+        element(app,"edit-delete-wire-0-segment-0").tap()
+        XCTAssertFalse(app.staticTexts["削除しますか？"].exists,"wires need no confirmation")
+        if element(app,"wire-0").exists {
+            XCTAssertNotEqual(routePoints(app,0),before0,"deleting the tapped segment must have changed wire-0")
+        }
+
+        // Symbols: the ✗ badge asks first; cancelling changes nothing, confirming deletes just that one.
+        let deleteMCU = element(app,"symbol-Main MCU-edit-delete")
+        XCTAssertTrue(deleteMCU.waitForExistence(timeout:2))
+        deleteMCU.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["キャンセル"].tap()
+        XCTAssertTrue(element(app,"symbol-Main MCU").exists,"cancelling must not delete")
+        deleteMCU.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["削除"].tap()
+        XCTAssertFalse(element(app,"symbol-Main MCU").exists)
+
+        // Notes: same confirmation. Deleting continues to work without leaving edit mode.
+        let deleteNote = element(app,"experiment-note-R12を変更-edit-delete")
+        XCTAssertTrue(deleteNote.waitForExistence(timeout:2))
+        deleteNote.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["削除"].tap()
+        XCTAssertFalse(element(app,"experiment-note-R12を変更").exists)
+        XCTAssertTrue(element(app,"edit-mode-badge").exists,"still in edit mode after several deletes")
+
+        // Leaving edit mode hides the ✗ badges and re-enables the other tools.
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertFalse(element(app,"edit-mode-badge").exists)
+        XCTAssertFalse(element(app,"symbol-24 V → 5 V-edit-delete").exists)
+        for label in ["選択","配線","＋シンボル","＋メモ","確認","設定"] {
+            XCTAssertTrue(app.buttons[label].isEnabled,"\(label) must work again outside edit mode")
+        }
+    }
+
+    @MainActor
     func testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker() throws {
         let app = XCUIApplication(); app.launch()
         let note = element(app,"experiment-note-R12を変更")

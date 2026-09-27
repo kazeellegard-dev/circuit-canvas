@@ -30,6 +30,11 @@ private enum NoteSize {
     }
 }
 private enum Tool { case select, symbol, note, wire }
+/// What the ✗ badge (edit mode, 4C) is about to delete, pending its confirmation alert.
+private enum EditDeleteTarget: Identifiable {
+    case symbol(UUID), note(UUID)
+    var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)" } }
+}
 private enum NoteType: String, CaseIterable, Identifiable {
     case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
     var id: Self { self }
@@ -123,6 +128,8 @@ struct ContentView: View {
     @State private var showResetConfirmation = false
     @State private var canvasName = "Circuit Canvas"
     @State private var canvasDescription = ""
+    @State private var editMode = false
+    @State private var pendingDelete: EditDeleteTarget?
     @State private var symbols: [SymbolItem] = [
         // All four kinds folded into the single generic block; the icon is kept explicit so the look does not change.
         .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
@@ -163,9 +170,13 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
+                        .disabled(editMode)
                     Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
+                        .disabled(editMode)
                     Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol }
+                        .disabled(editMode)
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
+                        .disabled(editMode)
                     Menu {
                         ForEach([25,50,100,150,200], id: \.self) { percent in
                             Button("\(percent)%") { setZoom(CGFloat(percent)/100) }
@@ -175,12 +186,36 @@ struct ContentView: View {
                         Label("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
                     }
                     .accessibilityIdentifier("zoom-menu")
+                    .disabled(editMode)
                     Button("確認", systemImage: "slider.horizontal.3") { showInspector = true }
+                        .disabled(editMode)
                     Button("設定", systemImage: "gearshape") { showSettings = true }
+                        .disabled(editMode)
+                    Button(editMode ? "編集中" : "編集", systemImage: editMode ? "trash.circle.fill" : "trash.circle") {
+                        editMode.toggle()
+                        // Edit mode has its own, exclusive UI (the ✗ badges); leave no other mode's state
+                        // dangling underneath it, in either direction.
+                        tool = .select
+                        selectedSymbol = nil; selectedNote = nil
+                        linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+                    }
+                    .tint(editMode ? .red : nil)
+                    .accessibilityIdentifier("edit-mode-toggle")
                 }
             }
             .sheet(isPresented: $showInspector) { NavigationStack { inspector.navigationTitle("インスペクタ") } }
             .sheet(isPresented: $showSettings) { NavigationStack { settings.navigationTitle("設定") } }
+            .alert("削除しますか？", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
+                Button("キャンセル", role: .cancel) { pendingDelete = nil }
+                Button("削除", role: .destructive) {
+                    switch pendingDelete {
+                    case .symbol(let id): removeSymbol(id)
+                    case .note(let id): removeNote(id)
+                    case .none: break
+                    }
+                    pendingDelete = nil
+                }
+            }
         }
     }
 
@@ -286,6 +321,14 @@ struct ContentView: View {
             .clipped()
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
+                    if editMode {
+                        Label("編集モード（削除できます）", systemImage: "trash.circle.fill")
+                            .font(.subheadline.weight(.bold))
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Color.red, in: Capsule())
+                            .foregroundStyle(.white)
+                            .accessibilityIdentifier("edit-mode-badge")
+                    }
                     if linkingNote != nil { hint("arrowshape.turn.up.right", "関連付ける角をタップ") }
                     else if pendingRelateFrom != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
                     else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
@@ -385,6 +428,15 @@ struct ContentView: View {
                         segmentTarget(wire: wire, index: index, segment: segment)
                     }
                 }
+                if editMode {
+                    // Every segment (not just the interior ones segmentTarget covers for dragging) is
+                    // tappable to delete, per this task: "任意の配線をタップすることで削除可能".
+                    ForEach(Array(wires.enumerated()), id: \.element.id) { index, wire in
+                        ForEach(0..<max(0, wire.points.count-1), id: \.self) { segment in
+                            editModeWireDeleteTarget(wire: wire, index: index, segment: segment)
+                        }
+                    }
+                }
                 ForEach(symbols) { symbol in
                     SymbolCard(
                         symbol: symbol,
@@ -392,26 +444,45 @@ struct ContentView: View {
                         selected: selectedSymbol == symbol.id,
                         wireStartPinIndex: pendingWirePinIndex(for: symbol),
                         select: {
-                            guard tool == .select else { return }
+                            guard tool == .select, !editMode else { return }
                             selectedSymbol = symbol.id
                             selectedNote = nil
                         },
                         selectPin: { index in
-                            guard tool == .wire else { return }
+                            guard tool == .wire, !editMode else { return }
                             selectWirePin(pins(for: symbol)[index])
                         }
                     )
                         .position(symbol.position)
                         .onTapGesture {
-                            guard tool == .select else { return }
+                            guard tool == .select, !editMode else { return }
                             selectedSymbol = symbol.id
                             selectedNote = nil
                         }
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
-                                .onChanged { value in move(symbolID: symbol.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
+                                .onChanged { value in
+                                    guard !editMode else { return }
+                                    move(symbolID: symbol.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                }
                                 .onEnded { _ in dragOrigins[symbol.id] = nil }
                         )
+                    if editMode {
+                        let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
+                        let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
+                        Button { pendingDelete = .symbol(symbol.id) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: side*0.75))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, .red)
+                                .frame(width: side, height: side)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(x: bounds.maxX, y: bounds.minY)
+                        .accessibilityLabel("シンボルを削除")
+                        .accessibilityIdentifier("symbol-\(symbol.title)-edit-delete")
+                    }
                 }
                 if let id = selectedSymbol, let symbol = symbols.first(where: { $0.id == id }), !symbol.kind.isBlock {
                     let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
@@ -478,7 +549,7 @@ struct ContentView: View {
                         note: $note,
                         selected: selectedNote == note.id,
                         select: {
-                            guard tool == .select else { return }
+                            guard tool == .select, !editMode else { return }
                             selectedNote = note.id
                             selectedSymbol = nil
                         }
@@ -486,10 +557,29 @@ struct ContentView: View {
                         .position(note.position)
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
-                                .onChanged { value in move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
+                                .onChanged { value in
+                                    guard !editMode else { return }
+                                    move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
                         )
                         .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; linkingNote = note.id } }
+                    if editMode {
+                        let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
+                        let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
+                        Button { pendingDelete = .note(note.id) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: side*0.75))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, .red)
+                                .frame(width: side, height: side)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(x: bounds.maxX, y: bounds.minY)
+                        .accessibilityLabel("付箋を削除")
+                        .accessibilityIdentifier("experiment-note-\(note.title)-edit-delete")
+                    }
                 }
                 if let id = selectedNote, let note = notes.first(where: { $0.id == id }) {
                     let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
@@ -862,10 +952,38 @@ struct ContentView: View {
                     updateSegmentDrag(translation: value.translation)
                 }
                 .onEnded { _ in segmentDrag = nil })
-            .allowsHitTesting(tool == .select)
+            .allowsHitTesting(tool == .select && !editMode)
+    }
+    /// Edit mode (4C): tapping any segment deletes just that straight piece, no confirmation. Covers every
+    /// segment (not only the interior ones segmentTarget's drag handles are limited to).
+    private func editModeWireDeleteTarget(wire: WireItem, index: Int, segment: Int) -> some View {
+        let a = wire.points[segment], b = wire.points[segment+1]
+        let horizontal = a.y == b.y
+        let length = horizontal ? abs(a.x-b.x) : abs(a.y-b.y)
+        return Color.clear
+            .frame(width: horizontal ? max(1,length) : 20, height: horizontal ? 20 : max(1,length))
+            .contentShape(Rectangle())
+            .position(x: (a.x+b.x)/2, y: (a.y+b.y)/2)
+            .onTapGesture { deleteWireSegment(wireID: wire.id, segment: segment) }
+            .accessibilityElement()
+            .accessibilityLabel("配線を削除")
+            .accessibilityIdentifier("edit-delete-wire-\(index)-segment-\(segment)")
+    }
+    /// Removes just the tapped straight piece; the remainder on each side becomes its own wire (or vanishes
+    /// if that side had nothing left). Deliberately not rerouted: what is left over is not always anchored
+    /// to a pin any more, so the routing engine cannot be trusted to make sense of it - a leftover dangling
+    /// wire is expected here, per this task ("どこにも繋がっていない配線が残る可能性がある...後で対応").
+    private func deleteWireSegment(wireID: UUID, segment: Int) {
+        guard let i = wires.firstIndex(where: { $0.id == wireID }) else { return }
+        let points = wires[i].points
+        guard segment >= 0, segment+1 < points.count else { return }
+        let front = Array(points[0...segment]), back = Array(points[(segment+1)...])
+        wires.remove(at: i)
+        if front.count >= 2 { wires.append(WireItem(start: front.first!, end: front.last!, points: front, manual: true, manualPoints: front)) }
+        if back.count >= 2 { wires.append(WireItem(start: back.first!, end: back.last!, points: back, manual: true, manualPoints: back)) }
     }
     private func beginSegmentDrag(at viewportPoint: CGPoint, translation: CGSize) {
-        guard tool == .select, segmentDrag == nil,
+        guard tool == .select, !editMode, segmentDrag == nil,
               let hit = WireRouting.nearestInteriorSegment(
                 to: canvasPoint(from: viewportPoint), paths: wires.map(\.points), maximumDistance: 8, translation: translation
               ) else { return }
