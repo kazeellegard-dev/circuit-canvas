@@ -770,11 +770,15 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-0").waitForExistence(timeout:1))
         XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-right-0").exists)
 
+        func drag(_ corner: String, _ dx: CGFloat, _ dy: CGFloat) {
+            if !element(app,"symbol-汎用ブロック-resize-\(corner)").waitForExistence(timeout:1) { element(app,"symbol-汎用ブロック").tap() }
+            let handle = element(app,"symbol-汎用ブロック-resize-\(corner)")
+            let start = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:dx,dy:dy)))
+        }
+
         // Grow to 3 rows (height 90): rows 1 and 2 are empty, so 4 "+" targets appear (left/right x 2 rows).
-        if !element(app,"symbol-汎用ブロック-resize-br").waitForExistence(timeout:1) { element(app,"symbol-汎用ブロック").tap() }
-        let brHandle = element(app,"symbol-汎用ブロック-resize-br")
-        let start = brHandle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:0,dy:60)))
+        drag("br",0,60)
         XCTAssertEqual((element(app,"symbol-汎用ブロック-size").value as? String ?? ""),"90,90")
         for side in ["left","right"] { for row in [1,2] {
             XCTAssertTrue(element(app,"symbol-汎用ブロック-add-pin-\(side)-\(row)").waitForExistence(timeout:2), "\(side) row \(row)")
@@ -789,7 +793,28 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-2"]),[top[0],top[1]+30])
         XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-1").exists,"that slot must not offer + again")
 
-        // The new pin wires like any other.
+        // N4: growing further keeps every existing pin's coordinates, and the new row gets its own "+".
+        drag("br",0,30)
+        XCTAssertEqual((element(app,"symbol-汎用ブロック-size").value as? String ?? ""),"90,120")
+        XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-0"]),top)
+        XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-2"]),[top[0],top[1]+30])
+        XCTAssertTrue(element(app,"symbol-汎用ブロック-add-pin-left-3").waitForExistence(timeout:2))
+        XCTAssertTrue(element(app,"symbol-汎用ブロック-add-pin-right-3").exists)
+
+        // N5: filling every remaining slot (row 2 both sides, row 3 both sides - row 1 left is already pin-2)
+        // leaves no "+" anywhere on the block.
+        for id in ["symbol-汎用ブロック-add-pin-right-1","symbol-汎用ブロック-add-pin-left-2","symbol-汎用ブロック-add-pin-right-2",
+                   "symbol-汎用ブロック-add-pin-left-3","symbol-汎用ブロック-add-pin-right-3"] {
+            let button = element(app,id)
+            XCTAssertTrue(button.waitForExistence(timeout:2), id)
+            button.tap()
+        }
+        for side in ["left","right"] { for row in 0...3 {
+            XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-\(side)-\(row)").exists, "\(side) row \(row) should be filled")
+        } }
+        XCTAssertTrue(app.buttons["symbol-汎用ブロック-pin-7"].exists,"8 pins total (2 per row x 4 rows)")
+
+        // The new pin (pin-2) wires like any other.
         app.buttons["配線"].tap()
         app.buttons["symbol-汎用ブロック-pin-2"].tap()
         app.buttons["symbol-Temperature-pin-1"].tap()
@@ -803,14 +828,29 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(Array(coordinates(element(app,"wire-3")).prefix(2)),coordinates(app.buttons["symbol-汎用ブロック-pin-2"]))
         assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
 
-        // Shrinking back to 1 row removes the slot's on-screen room, but the already-added pin (and its wire)
-        // are untouched by resizing alone (3C does not remove pins) - the block just cannot grow a *new* one there.
+        // Shrinking is capped at the deepest added pin's row (pin-7, row 3): height cannot go below 120, even
+        // dragging far past it - the size, every pin's edge position, and the wire's route must all reflect that.
         // (Selecting the wire tool earlier cleared the selection, so the resize handles need reselecting first.)
         element(app,"symbol-汎用ブロック").tap()
-        if !element(app,"symbol-汎用ブロック-resize-br").waitForExistence(timeout:1) { element(app,"symbol-汎用ブロック").tap() }
-        let shrink = element(app,"symbol-汎用ブロック-resize-br").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        shrink.press(forDuration:0.2,thenDragTo:shrink.withOffset(CGVector(dx:0,dy:-90)))
-        XCTAssertTrue(app.buttons["symbol-汎用ブロック-pin-2"].exists)
+        drag("br",0,-900)
+        XCTAssertEqual((element(app,"symbol-汎用ブロック-size").value as? String ?? ""),"90,120","must not shrink below the deepest added pin's row")
+        // Left/right pins sit exactly on the body's edges; row 0's are the reference point for every other row.
+        let leftX = coordinates(app.buttons["symbol-汎用ブロック-pin-0"])[0]
+        let rightX = coordinates(app.buttons["symbol-汎用ブロック-pin-1"])[0]
+        let topY = coordinates(app.buttons["symbol-汎用ブロック-pin-0"])[1]
+        XCTAssertEqual(rightX-leftX,90,"width unaffected by a height-only drag")
+        for row in 0...3 {
+            XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-\(row*2)"]),[leftX,topY+CGFloat(row)*30],"row \(row) left")
+            XCTAssertEqual(coordinates(app.buttons["symbol-汎用ブロック-pin-\(row*2+1)"]),[rightX,topY+CGFloat(row)*30],"row \(row) right")
+        }
+        XCTAssertEqual(Array(coordinates(element(app,"wire-3")).prefix(2)),coordinates(app.buttons["symbol-汎用ブロック-pin-2"]))
+        assertRoutesClear(app,count:4,extraSymbols:["汎用ブロック"])
+
+        // N6: deleting a block with an added, wired pin removes that wire too, like any other symbol deletion.
+        app.buttons["確認"].tap()
+        app.buttons["シンボルを削除"].tap()
+        XCTAssertFalse(element(app,"symbol-汎用ブロック").exists)
+        XCTAssertEqual(element(app,"wire-count").value as? String,"3")
     }
 
     @MainActor

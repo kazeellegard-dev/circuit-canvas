@@ -318,4 +318,52 @@ struct CircuitSymbolTests {
             #expect(hypot(positions[i].x-positions[j].x,positions[i].y-positions[j].y) >= 30)
         } }
     }
+
+    /// The "+" indicator (fixed 26pt, offset 2pt outside the pin column) must clear a same-row pin's 28pt square,
+    /// an adjacent row's, and every resize handle - at every zoom the app allows (0.5x...2.5x). Mirrors the
+    /// geometry ContentView.swift computes for the "+" buttons and resize handles.
+    @Test func addPinIndicatorNeverOverlapsAPinOrAResizeHandleAtAnyZoom() {
+        let plusSide: CGFloat = 26
+        func plusRect(edgeX: CGFloat, y: CGFloat, outward: CGFloat) -> CGRect {
+            CGRect(x: edgeX+outward-plusSide/2, y: y-plusSide/2, width: plusSide, height: plusSide)
+        }
+        for size in [CGSize(width:90,height:60), CGSize(width:90,height:90), CGSize(width:150,height:180)] {
+            let body = SymbolKind.block.body(at:.zero, rotation:0, size:size)
+            let occupied: [SymbolKind.BlockPin] = [.init(side:.left,slot:0),.init(side:.right,slot:0)]
+            let occupiedPositions = Set(SymbolKind.block.pins(at:.zero,size:size,blockPins:occupied).map { "\($0.x),\($0.y)" })
+            let open = SymbolKind.blockPinSlots(height:size.height).filter { !occupied.contains($0) }
+            var plusRects: [CGRect] = []
+            for slot in open {
+                let y = body.minY + 15 + CGFloat(slot.slot)*30
+                let plus = plusRect(edgeX: slot.side == .left ? body.minX : body.maxX, y: y, outward: slot.side == .left ? -(plusSide/2+2) : (plusSide/2+2))
+                for other in plusRects { #expect(!plus.intersects(other), "size \(size) slot \(slot) vs another + indicator") }
+                plusRects.append(plus)
+                // Every ALREADY-OCCUPIED pin (the slot this "+" offers is, by definition, still empty, so its own
+                // eventual pin can never coexist with it on screen - that comparison would not be a real conflict).
+                for pinY in stride(from: body.minY+15, through: body.maxY-15, by: 30) {
+                    let pinX = slot.side == .left ? body.minX : body.maxX
+                    guard occupiedPositions.contains("\(pinX),\(pinY)") else { continue }
+                    let pinRect = CGRect(x:pinX-14,y:pinY-14,width:28,height:28)
+                    #expect(!plus.intersects(pinRect), "size \(size) slot \(slot) vs pin row at \(pinY)")
+                }
+                // Every resize handle, at the zoom extremes the app allows.
+                for scale in [CGFloat(0.5), 1, 2.5] {
+                    for (sx,sy) in [(-1.0,-1.0),(1,-1),(-1,1),(1,1)] {
+                        let handle = BlockSize.handleRect(body: body, sx: CGFloat(sx), sy: CGFloat(sy), scale: scale)
+                        #expect(!plus.intersects(handle), "size \(size) slot \(slot) vs handle \(sx),\(sy) at scale \(scale)")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: minimum block height respects added pins
+
+    @Test func minimumBlockHeightGrowsWithTheDeepestAddedPin() {
+        // Mirrors ContentView.minimumBlockHeight: 30 * (max slot + 1), never below the standard minimum.
+        func minimumHeight(_ pins: [SymbolKind.BlockPin]) -> CGFloat { max(30, 30 * CGFloat((pins.map(\.slot).max() ?? 0) + 1)) }
+        #expect(minimumHeight(SymbolKind.defaultBlockPins) == 30)
+        #expect(minimumHeight(SymbolKind.defaultBlockPins + [.init(side:.left,slot:2)]) == 90)
+        #expect(minimumHeight(SymbolKind.defaultBlockPins + [.init(side:.right,slot:1)]) == 60)
+    }
 }

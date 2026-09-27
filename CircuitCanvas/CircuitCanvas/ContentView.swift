@@ -305,13 +305,21 @@ struct ContentView: View {
                     // "+" on every row this block's height allows that does not have a pin yet (3C).
                     let taken = Set(symbol.blockPins)
                     let open = SymbolKind.blockPinSlots(height: symbol.size.height).filter { !taken.contains($0) }
+                    // Fixed in canvas units, like the pins and the 30pt row pitch themselves - not screen-constant.
+                    // Growing this at low zoom (as the resize handles do) would make it bigger than the 30pt gap
+                    // between rows, guaranteeing overlap with a neighbouring pin; staying fixed keeps it scaling
+                    // together with the grid it sits on, so if it clears its neighbours at 100% it clears them at
+                    // every zoom. Its own on-screen size (26pt) is therefore short of the usual 32pt minimum on this
+                    // one control - a deliberate trade-off, not an oversight (see the block-pin-add task notes).
+                    let plusSide: CGFloat = 26
                     ForEach(Array(open.enumerated()), id: \.offset) { _, slot in
                         let y = bounds.minY + 15 + CGFloat(slot.slot) * 30
-                        let x = slot.side == .left ? bounds.minX : bounds.maxX
-                        let plusSide = ResizableGeometry.screenConstant(28, scale: canvasScale)
+                        // Offset outward from the pin column so the target is visually distinct from where the
+                        // pin itself will land, per Codex review.
+                        let x = slot.side == .left ? bounds.minX - plusSide/2 - 2 : bounds.maxX + plusSide/2 + 2
                         Button { addBlockPin(symbolID: id, pin: slot) } label: {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 16*k))
+                                .font(.system(size: plusSide*0.6))
                                 .background(Circle().fill(.background))
                                 .frame(width: plusSide, height: plusSide)
                                 .contentShape(Rectangle())
@@ -405,9 +413,9 @@ struct ContentView: View {
                         LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
                         Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
-                                // Same top-left corner, standard size.
+                                // Same top-left corner, standard size (but never shorter than an added pin needs).
                                 let body = symbols[i].kind.body(at:symbols[i].position,rotation:0,size:symbols[i].size)
-                                let standard = BlockSize.standard
+                                let standard = CGSize(width: BlockSize.standard.width, height: max(BlockSize.standard.height, minimumBlockHeight(for: symbols[i])))
                                 applyBlockGeometry(i, center: CGPoint(x:body.minX+standard.width/2,y:body.minY+standard.height/2), size: standard)
                             }
                         }
@@ -502,11 +510,18 @@ struct ContentView: View {
               !symbols[i].blockPins.contains(pin) else { return }
         symbols[i].blockPins.append(pin)
     }
+    /// A block cannot shrink shorter than the row its highest added pin sits on - that pin has nowhere else to go
+    /// (pins are not removed by resizing; only added).
+    private func minimumBlockHeight(for symbol: SymbolItem) -> CGFloat {
+        max(BlockSize.minimum.height, 30 * CGFloat((symbol.blockPins.map(\.slot).max() ?? 0) + 1))
+    }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
         let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
         resizeDrag = origin
-        let result = BlockSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
+        let minimum = CGSize(width: BlockSize.minimum.width, height: minimumBlockHeight(for: symbols[i]))
+        let result = ResizableGeometry.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy,
+                                               translation: translation, step: BlockSize.step, minimum: minimum, maximum: BlockSize.maximum)
         applyBlockGeometry(i, center: result.center, size: result.size)
     }
     /// Moves the block's pins and carries the attached wire ends along. Like moving a symbol, manually placed
