@@ -107,8 +107,9 @@ else
     }
     run_gate
     # ランナーが起動できなかった（テストが 1 件も走っていない）ときだけ、もう 1 回やり直す。
-    # 「1 件も実行できなかった」と確認できたときだけ、やり直す（XCTest と Swift Testing の両方の開始記録を見る。
-    # どちらの記録も見当たらず、判断できないときは、やり直さない — 一部だけ実行できた結果を、消さないため）。
+    # ランナーの起動失敗のログがあり、かつ XCTest・Swift Testing どちらの「開始」記録もないときだけ、やり直す。
+    # 記録が見当たらない＝実行 0 件、とみなす簡便な判定（xcresult の実行件数そのものは見ていない）。
+    # 記録が実際にあれば（一部だけでも実行できていれば）、やり直さず、その結果を残す。
     if [[ $GATE_EXIT -ne 0 ]] && grep -q "Failed to install or launch the test runner" "$RUN_DIR/gate.log" \
         && ! grep -qE "^Test Case '|Test .* started\.$" "$RUN_DIR/gate.log"; then
       log "テストランナーの起動に失敗したため（テストは 0 件）、端末を再起動して、ゲートをやり直します"
