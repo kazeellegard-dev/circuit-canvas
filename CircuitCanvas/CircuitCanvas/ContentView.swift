@@ -94,6 +94,10 @@ private struct NoteItem: Identifiable {
     }
 }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
+/// One Undo/Redo step (4D): the whole diagram's content, from just before one meaningful operation. Simpler
+/// and safer than hooking every mutation individually into SwiftUI's UndoManager, at the cost of copying
+/// three arrays per step - trivial at this diagram's scale, and capped (maxUndoSteps) regardless.
+private struct CanvasSnapshot { var symbols: [SymbolItem]; var notes: [NoteItem]; var wires: [WireItem] }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -130,6 +134,14 @@ struct ContentView: View {
     @State private var canvasDescription = ""
     @State private var editMode = false
     @State private var pendingDelete: EditDeleteTarget?
+    @State private var undoStack: [CanvasSnapshot] = []
+    @State private var redoStack: [CanvasSnapshot] = []
+    @State private var undoRedoUnavailableReason: String?
+    private let maxUndoSteps = 20
+    // Batches every field edit made during one inspector visit (title, body, type, icon - all routed through
+    // symbolBinding/noteBinding's setter, once per keystroke) into a single Undo step: pushed lazily, on the
+    // first actual edit, not merely on opening the sheet to look.
+    @State private var inspectorSessionPushed = false
     @State private var symbols: [SymbolItem] = [
         // All four kinds folded into the single generic block; the icon is kept explicit so the look does not change.
         .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
@@ -169,6 +181,18 @@ struct ContentView: View {
             }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // Left enabled during edit mode on purpose: undoing an accidental delete is exactly the
+                    // safety net this exists for, and it would defeat the point to grey it out right then.
+                    Button("元に戻す", systemImage: "arrow.uturn.backward") {
+                        if undoStack.isEmpty { undoRedoUnavailableReason = "取り消す操作がありません" } else { performUndo() }
+                    }
+                    .disabled(undoStack.isEmpty)
+                    .accessibilityIdentifier("undo-button")
+                    Button("やり直す", systemImage: "arrow.uturn.forward") {
+                        if redoStack.isEmpty { undoRedoUnavailableReason = "やり直す操作がありません" } else { performRedo() }
+                    }
+                    .disabled(redoStack.isEmpty)
+                    .accessibilityIdentifier("redo-button")
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(editMode)
                     Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
@@ -187,7 +211,7 @@ struct ContentView: View {
                     }
                     .accessibilityIdentifier("zoom-menu")
                     .disabled(editMode)
-                    Button("確認", systemImage: "slider.horizontal.3") { showInspector = true }
+                    Button("確認", systemImage: "slider.horizontal.3") { inspectorSessionPushed = false; showInspector = true }
                         .disabled(editMode)
                     Button("設定", systemImage: "gearshape") { showSettings = true }
                         .disabled(editMode)
@@ -215,6 +239,11 @@ struct ContentView: View {
                     }
                     pendingDelete = nil
                 }
+            }
+            .alert("できません", isPresented: Binding(get: { undoRedoUnavailableReason != nil }, set: { if !$0 { undoRedoUnavailableReason = nil } })) {
+                Button("OK", role: .cancel) { undoRedoUnavailableReason = nil }
+            } message: {
+                Text(undoRedoUnavailableReason ?? "")
             }
         }
     }
@@ -679,6 +708,7 @@ struct ContentView: View {
                         LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
                         Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
+                                pushUndo()
                                 // Same top-left corner, standard size (but never shorter than an added pin needs).
                                 let body = symbols[i].kind.body(at:symbols[i].position,rotation:0,size:symbols[i].size)
                                 let standard = CGSize(width: BlockSize.standard.width, height: max(BlockSize.standard.height, BlockSize.minimumHeight(for: symbols[i].blockPins)))
@@ -722,6 +752,7 @@ struct ContentView: View {
 
     private func setAnchor(_ id: UUID, _ point: CGPoint, corner: NoteCorner) {
         guard let i = notes.firstIndex(where: { $0.id == id }) else { return }
+        pushUndo()
         notes[i].anchor = point; notes[i].relateCorner = corner
     }
     private func selectWirePin(_ pin: CGPoint) {
@@ -750,18 +781,27 @@ struct ContentView: View {
         guard let initial = symbols.first(where: { $0.id == id }) else { return nil }
         return Binding(
             get: { symbols.first(where: { $0.id == id }) ?? initial },
-            set: { updated in guard let index = symbols.firstIndex(where: { $0.id == id }) else { return }; symbols[index] = updated }
+            set: { updated in
+                guard let index = symbols.firstIndex(where: { $0.id == id }) else { return }
+                if !inspectorSessionPushed { pushUndo(); inspectorSessionPushed = true }
+                symbols[index] = updated
+            }
         )
     }
     private func noteBinding(for id: UUID) -> Binding<NoteItem>? {
         guard let initial = notes.first(where: { $0.id == id }) else { return nil }
         return Binding(
             get: { notes.first(where: { $0.id == id }) ?? initial },
-            set: { updated in guard let index = notes.firstIndex(where: { $0.id == id }) else { return }; notes[index] = updated }
+            set: { updated in
+                guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+                if !inspectorSessionPushed { pushUndo(); inspectorSessionPushed = true }
+                notes[index] = updated
+            }
         )
     }
     private func rotateSymbol(_ id: UUID) {
         guard let i = symbols.firstIndex(where: { $0.id == id }), !symbols[i].kind.isBlock else { return }
+        pushUndo()
         let old = pins(for:symbols[i])
         symbols[i].rotation = (symbols[i].rotation + 90) % 360
         let new = pins(for:symbols[i])
@@ -774,6 +814,7 @@ struct ContentView: View {
     }
     private func resizeNote(noteID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        if noteResizeDrag?.id != noteID { pushUndo() }
         let origin = noteResizeDrag?.id == noteID ? noteResizeDrag! : ResizeDrag(id: noteID, center: notes[i].position, size: notes[i].size)
         noteResizeDrag = origin
         let result = NoteSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
@@ -783,10 +824,12 @@ struct ContentView: View {
     private func addBlockPin(symbolID: UUID, pin: SymbolKind.BlockPin) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock,
               !symbols[i].blockPins.contains(pin) else { return }
+        pushUndo()
         symbols[i].blockPins.append(pin)
     }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
+        if resizeDrag?.id != symbolID { pushUndo() }
         let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
         resizeDrag = origin
         let minimum = CGSize(width: BlockSize.minimum.width, height: BlockSize.minimumHeight(for: symbols[i].blockPins))
@@ -810,6 +853,7 @@ struct ContentView: View {
     }
     private func removeSymbol(_ id: UUID) {
         guard let symbol = symbols.first(where: { $0.id == id }) else { return }
+        pushUndo()
         let symbolPins = pins(for: symbol)
         wires.removeAll { wire in
             symbolPins.contains { pin in wire.start.distance(to: pin) < 1 || wire.end.distance(to: pin) < 1 }
@@ -818,6 +862,8 @@ struct ContentView: View {
         symbols.removeAll { $0.id == id }; reroute()
     }
     private func removeNote(_ id: UUID) {
+        guard notes.contains(where: { $0.id == id }) else { return }
+        pushUndo()
         selectedNote = nil
         linkingNote = nil
         if pendingRelateFrom?.id == id { pendingRelateFrom = nil }
@@ -826,10 +872,37 @@ struct ContentView: View {
     /// Settings' "キャンバスをリセット" (only reachable after its own confirmation dialog): clears the
     /// diagram back to blank, and any state that referred to what was on it.
     private func resetCanvas() {
+        pushUndo()
         symbols = []; notes = []; wires = []
         selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         tool = .select
         reroute()
+    }
+    // MARK: Undo / Redo (4D)
+    /// Call right before a meaningful, undoable change (see this task's list: add/move/resize/rotate/
+    /// pin-add/delete/rename/type/icon). A drag pushes once, at its first onChanged, not on every delta.
+    private func pushUndo() {
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        if undoStack.count > maxUndoSteps { undoStack.removeFirst() }
+        redoStack.removeAll()
+    }
+    private func performUndo() {
+        guard let previous = undoStack.popLast() else { undoRedoUnavailableReason = "取り消す操作がありません"; return }
+        redoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        restore(previous)
+    }
+    private func performRedo() {
+        guard let next = redoStack.popLast() else { undoRedoUnavailableReason = "やり直す操作がありません"; return }
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        restore(next)
+    }
+    /// Snapshots already hold each wire's exact prior `.points`, so this does not reroute() - replanning
+    /// could legitimately land on a different route than the one actually being restored.
+    private func restore(_ snapshot: CanvasSnapshot) {
+        symbols = snapshot.symbols; notes = snapshot.notes; wires = snapshot.wires
+        selectedSymbol = nil; selectedNote = nil
+        linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+        dragOrigins = [:]; noteDragOrigins = [:]; resizeDrag = nil; noteResizeDrag = nil; segmentDrag = nil
     }
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
@@ -884,6 +957,7 @@ struct ContentView: View {
     }
     private func move(symbolID: UUID, by translation: CGSize) {
         guard let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
+        if dragOrigins[symbolID] == nil { pushUndo() }
         let origin = dragOrigins[symbolID] ?? symbols[index].position
         dragOrigins[symbolID] = origin
         let oldPosition = symbols[index].position
@@ -900,6 +974,7 @@ struct ContentView: View {
     }
     private func move(noteID: UUID, by translation: CGSize) {
         guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        if noteDragOrigins[noteID] == nil { pushUndo() }
         let origin = noteDragOrigins[noteID] ?? notes[index].position
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
@@ -985,6 +1060,7 @@ struct ContentView: View {
     /// wire is expected here, per this task ("どこにも繋がっていない配線が残る可能性がある...後で対応").
     private func deleteWireSegment(wireID: UUID, segment: Int) {
         guard let i = wires.firstIndex(where: { $0.id == wireID }), segment >= 0, segment+1 < wires[i].points.count else { return }
+        pushUndo()
         let (front, back) = WireRouting.split(wires[i].points, at: segment)
         wires.remove(at: i)
         if let front { wires.append(WireItem(start: front.first!, end: front.last!, points: front, manual: true, manualPoints: front)) }
@@ -995,6 +1071,7 @@ struct ContentView: View {
               let hit = WireRouting.nearestInteriorSegment(
                 to: canvasPoint(from: viewportPoint), paths: wires.map(\.points), maximumDistance: 8, translation: translation
               ) else { return }
+        pushUndo()
         segmentDrag = SegmentDrag(wireID: wires[hit.wire].id,
                                   segment: hit.segment, origin: wires[hit.wire].points)
     }

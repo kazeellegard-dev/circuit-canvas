@@ -406,6 +406,61 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testUndoRedoOnASymbolMoveAndAfterANewOperationRedoIsCleared() throws {
+        let app = XCUIApplication(); app.launch()
+        let symbol = element(app,"symbol-Main MCU")
+        XCTAssertTrue(symbol.waitForExistence(timeout:3))
+
+        XCTAssertFalse(app.buttons["undo-button"].isEnabled,"nothing to undo yet")
+        XCTAssertFalse(app.buttons["redo-button"].isEnabled,"nothing to redo yet")
+
+        let before = symbol.frame
+        let start = symbol.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.1,thenDragTo:start.withOffset(CGVector(dx:60,dy:40)))
+        let moved = symbol.frame
+        XCTAssertNotEqual(moved.origin.x,before.origin.x,"the symbol must actually have moved")
+
+        // Undo: back to the original position.
+        XCTAssertTrue(app.buttons["undo-button"].isEnabled)
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(symbol.frame.origin.x,before.origin.x,accuracy:1)
+        XCTAssertEqual(symbol.frame.origin.y,before.origin.y,accuracy:1)
+
+        // Redo: forward again to the moved position.
+        XCTAssertTrue(app.buttons["redo-button"].isEnabled)
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(symbol.frame.origin.x,moved.origin.x,accuracy:1)
+        XCTAssertEqual(symbol.frame.origin.y,moved.origin.y,accuracy:1)
+
+        // Undo again, then perform a different operation: redo must now be unavailable.
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(symbol.frame.origin.x,before.origin.x,accuracy:1)
+        XCTAssertTrue(app.buttons["redo-button"].isEnabled,"still redoable right after an undo")
+        start.press(forDuration:0.1,thenDragTo:start.withOffset(CGVector(dx:-30,dy:20)))
+        XCTAssertFalse(app.buttons["redo-button"].isEnabled,"a new operation must clear the redo stack")
+    }
+
+    @MainActor
+    func testUndoStackIsCappedAtTwentySteps() throws {
+        let app = XCUIApplication(); app.launch()
+        let symbol = element(app,"symbol-Main MCU")
+        XCTAssertTrue(symbol.waitForExistence(timeout:3))
+        let start = symbol.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        // 21 separate drags - each its own gesture, so each pushes its own undo step - oscillating a small
+        // amount so the symbol (and so `start`, re-resolved against its current frame each time) never
+        // drifts far from where it started.
+        for i in 0..<21 {
+            let dy: CGFloat = (i % 2 == 0) ? 6 : -6
+            start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:0,dy:dy)))
+        }
+        for step in 0..<20 {
+            XCTAssertTrue(app.buttons["undo-button"].isEnabled,"step \(step)")
+            app.buttons["undo-button"].tap()
+        }
+        XCTAssertFalse(app.buttons["undo-button"].isEnabled,"only 20 steps of history are kept - the 21st move's prior state was evicted")
+    }
+
+    @MainActor
     func testEditModeGraysOutOtherToolsAndDeletesSymbolsNotesAndWireSegments() throws {
         let app = XCUIApplication(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
