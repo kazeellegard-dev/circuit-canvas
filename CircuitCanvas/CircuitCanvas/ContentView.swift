@@ -984,7 +984,7 @@ struct ContentView: View {
     /// to a pin any more, so the routing engine cannot be trusted to make sense of it - a leftover dangling
     /// wire is expected here, per this task ("どこにも繋がっていない配線が残る可能性がある...後で対応").
     private func deleteWireSegment(wireID: UUID, segment: Int) {
-        guard let i = wires.firstIndex(where: { $0.id == wireID }) else { return }
+        guard let i = wires.firstIndex(where: { $0.id == wireID }), segment >= 0, segment+1 < wires[i].points.count else { return }
         let (front, back) = WireRouting.split(wires[i].points, at: segment)
         wires.remove(at: i)
         if let front { wires.append(WireItem(start: front.first!, end: front.last!, points: front, manual: true, manualPoints: front)) }
