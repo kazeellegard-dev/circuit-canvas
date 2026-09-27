@@ -13,10 +13,26 @@ private enum ResizeCorner: String, CaseIterable, Identifiable {
     var sx: CGFloat { self == .tl || self == .bl ? -1 : 1 }
     var sy: CGFloat { self == .tl || self == .tr ? -1 : 1 }
 }
+/// Resizing of experiment notes: 20pt steps, wide enough to read the body text at the minimum size.
+private enum NoteSize {
+    static let step: CGFloat = 20
+    // Aligned to `standard` (170,100) so the first resize snaps predictably rather than jumping to a
+    // grid the starting size does not sit on.
+    static let minimum = CGSize(width:150,height:80)
+    static let maximum = CGSize(width:390,height:320)
+    static let standard = CGSize(width:170,height:100)
+    static func snapped(_ proposed: CGSize) -> CGSize { ResizableGeometry.snapped(proposed, step:step, minimum:minimum, maximum:maximum) }
+    static func handleRect(body: CGRect, sx: CGFloat, sy: CGFloat, scale: CGFloat) -> CGRect {
+        ResizableGeometry.handleRect(body:body, sx:sx, sy:sy, scale:scale)
+    }
+    static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
+        ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
+    }
+}
 private enum Tool { case select, symbol, note, wire }
 private enum NoteType: String, CaseIterable, Identifiable { case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意"; var id: Self { self } }
 private struct SymbolItem: Identifiable { let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize; var icon: String { kind.icon }; init(title: String, kind: SymbolKind, position: CGPoint) { self.title = title; self.kind = kind; self.position = position; self.rotation = kind.defaultRotation; self.size = kind.frameSize } }
-private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint? }
+private struct NoteItem: Identifiable { let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint; var complete = false; var anchor: CGPoint?; var size: CGSize = NoteSize.standard }
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 
 struct ContentView: View {
@@ -37,6 +53,7 @@ struct ContentView: View {
     }
     private struct ResizeDrag { let id: UUID; let center: CGPoint; let size: CGSize }
     @State private var resizeDrag: ResizeDrag?
+    @State private var noteResizeDrag: ResizeDrag?
     @State private var segmentDrag: SegmentDrag?
     @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
@@ -290,6 +307,35 @@ struct ContentView: View {
                         )
                         .contextMenu { Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }; Button("関連付け", systemImage: "arrowshape.turn.up.right") { linkingNote = note.id } }
                 }
+                if let id = selectedNote, let note = notes.first(where: { $0.id == id }) {
+                    let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
+                    let k = max(1, 1 / canvasScale)
+                    ForEach(ResizeCorner.allCases) { corner in
+                        let hit = NoteSize.handleRect(body: bounds, sx: corner.sx, sy: corner.sy, scale: canvasScale)
+                        Color.clear.frame(width:hit.width,height:hit.height)
+                            .overlay { Circle().fill(Color.accentColor).frame(width:10*k,height:10*k)
+                                .offset(x:-corner.sx*6*k,y:-corner.sy*10*k) }
+                            .contentShape(Rectangle())
+                            .position(x:hit.midX, y:hit.midY)
+                            .accessibilityElement().accessibilityLabel("大きさを変更")
+                            .accessibilityIdentifier("experiment-note-\(note.title)-resize-\(corner.rawValue)")
+                            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("editorViewport"))
+                                .onChanged { value in resizeNote(noteID: id, corner: corner, translation: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)) }
+                                .onEnded { _ in noteResizeDrag = nil })
+                    }
+                    // Same idea as the circuit-symbol rotate button: an action, next to the selected item, that
+                    // needs no trip through the inspector sheet (which would then block tapping the canvas below it).
+                    Button { linkingNote = id } label: {
+                        Image(systemName:"arrowshape.turn.up.right")
+                            .frame(width:32,height:32)
+                            .background(.regularMaterial,in:Circle())
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x:bounds.midX,y:bounds.minY-24)
+                    .accessibilityLabel("関連付け")
+                    .accessibilityIdentifier("experiment-note-\(note.title)-relate")
+                }
 
             }
     }
@@ -316,10 +362,7 @@ struct ContentView: View {
                     LabeledContent("接続", value: isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                         .accessibilityIdentifier("symbol-connection-status")
                         .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
-                    if !symbol.wrappedValue.kind.isBlock {
-                        Button("回転", systemImage:"arrow.clockwise") { rotateSymbol(id) }
-                            .accessibilityIdentifier("inspector-rotate")
-                    } else {
+                    if symbol.wrappedValue.kind.isBlock {
                         LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
                         Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
@@ -341,7 +384,6 @@ struct ContentView: View {
                     TextField("タイトル", text: note.title)
                     TextField("本文", text: note.body, axis: .vertical)
                     Toggle("完了", isOn: note.complete)
-                    Button("関連付けを開始", systemImage: "arrowshape.turn.up.right") { linkingNote = id }
                     Button("メモを削除", role: .destructive) {
                         removeNote(id)
                     }
@@ -354,7 +396,7 @@ struct ContentView: View {
                         .accessibilityValue("\(wires.count)")
                     ForEach(symbols) { symbol in Label(isConnected(symbol) ? "\(symbol.title) — 接続あり" : "\(symbol.title) — 未接続", systemImage: isConnected(symbol) ? "checkmark.circle.fill" : "exclamationmark.circle") .foregroundStyle(isConnected(symbol) ? .green : .orange) }
                 }
-                Section("操作") { Text("＋メモを押して任意位置に付箋を置けます。付箋を長押しして「関連付け」を選ぶと、引出し線を追加できます。") }
+                Section("操作") { Text("＋メモを押して任意位置に付箋を置けます。付箋を選ぶと、そばのボタンで、関連付けや大きさの変更ができます。") }
             }
         }.formStyle(.grouped)
     }
@@ -407,6 +449,13 @@ struct ContentView: View {
         }
         if let pin = pendingWireStart, let point = SymbolKind.remapped(pin, from: old, to: new) { pendingWireStart = point }
         reroute()
+    }
+    private func resizeNote(noteID: UUID, corner: ResizeCorner, translation: CGSize) {
+        guard let i = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        let origin = noteResizeDrag?.id == noteID ? noteResizeDrag! : ResizeDrag(id: noteID, center: notes[i].position, size: notes[i].size)
+        noteResizeDrag = origin
+        let result = NoteSize.resized(center: origin.center, size: origin.size, sx: corner.sx, sy: corner.sy, translation: translation)
+        notes[i].position = result.center; notes[i].size = result.size
     }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
         guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
@@ -719,7 +768,37 @@ private struct NoteCard: View {
     @Binding var note: NoteItem
     let selected: Bool
     let select: () -> Void
-    var body: some View { VStack(alignment: .leading, spacing: 6) { HStack { Image(systemName: note.complete ? "checkmark.circle.fill" : "wrench.and.screwdriver"); Text(note.type.rawValue); Spacer() }.font(.caption.weight(.medium)); Text(note.title).font(.subheadline.weight(.semibold)); Text(note.body).font(.caption).lineLimit(3) }.foregroundStyle(note.complete ? .secondary : .primary).padding(12).frame(width: 170, alignment: .leading).background(note.complete ? Color.gray.opacity(0.16) : Color.yellow.opacity(0.22), in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 3)).opacity(note.complete ? 0.68 : 1).contentShape(RoundedRectangle(cornerRadius: 10)).onTapGesture(perform: select).accessibilityElement(children: .combine).accessibilityIdentifier("experiment-note-\(note.title)").accessibilityValue("x=\(Int(note.position.x)), y=\(Int(note.position.y))") }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack { Image(systemName: note.complete ? "checkmark.circle.fill" : "wrench.and.screwdriver"); Text(note.type.rawValue); Spacer() }.font(.caption.weight(.medium))
+            Text(note.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+            Text(note.body).font(.caption)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(note.complete ? .secondary : .primary)
+        .padding(12)
+        .frame(width: note.size.width, height: note.size.height, alignment: .topLeading)
+        // The body can outgrow a note shrunk to its minimum; clip rather than spill onto the canvas.
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(note.complete ? Color.gray.opacity(0.16) : Color.yellow.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 3))
+        .opacity(note.complete ? 0.68 : 1)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture(perform: select)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("experiment-note-\(note.title)")
+        .accessibilityValue("x=\(Int(note.position.x)), y=\(Int(note.position.y))")
+        .overlay(alignment: .topLeading) {
+            Text("size").font(.system(size:1)).opacity(0.01)
+                .accessibilityIdentifier("experiment-note-\(note.title)-size")
+                .accessibilityValue("\(Int(note.size.width)),\(Int(note.size.height))")
+                .allowsHitTesting(false)
+            Text("anchor").font(.system(size:1)).opacity(0.01)
+                .accessibilityIdentifier("experiment-note-\(note.title)-anchor")
+                .accessibilityValue(note.anchor.map { "\(Int($0.x)),\(Int($0.y))" } ?? "")
+                .allowsHitTesting(false)
+        }
+    }
 }
 
 private struct Grid: View { var body: some View { Canvas { context, size in var path = Path(); for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }; for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }; context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1) } } }

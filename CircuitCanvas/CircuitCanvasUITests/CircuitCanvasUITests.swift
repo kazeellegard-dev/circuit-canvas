@@ -44,6 +44,67 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testNoteResizeHandlesSnappingAndMinimumSize() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        func size() -> [Double] {
+            (element(app,"experiment-note-R12を変更-size").value as? String ?? "").split(separator:",").compactMap { Double($0) }
+        }
+        XCTAssertEqual(size(),[170,100])
+        XCTAssertFalse(element(app,"experiment-note-R12を変更-resize-br").exists)
+        note.tap()
+        XCTAssertTrue(element(app,"experiment-note-R12を変更-resize-br").waitForExistence(timeout:2))
+        func drag(_ corner: String, _ dx: CGFloat, _ dy: CGFloat) {
+            let handle = element(app,"experiment-note-R12を変更-resize-\(corner)")
+            let start = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:dx,dy:dy)))
+        }
+        // br: grows by 20pt steps; a drag too short for the next step changes nothing.
+        drag("br",5,5)
+        XCTAssertEqual(size(),[170,100])
+        drag("br",40,40)
+        XCTAssertEqual(size(),[210,140])
+        // tl: shrinks towards the minimum and stops there, however far the drag goes.
+        drag("tl",900,900)
+        XCTAssertEqual(size(),[150,80])
+        // The body text is still there (clipped, not hidden) at the minimum size.
+        XCTAssertTrue(note.staticTexts["10 kΩへ変更して波形を再測定"].exists)
+    }
+
+    @MainActor
+    func testNoteRelateButtonWorksWithoutOpeningTheInspector() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        XCTAssertFalse(element(app,"experiment-note-R12を変更-relate").exists)
+        note.tap()
+        let relate = element(app,"experiment-note-R12を変更-relate")
+        XCTAssertTrue(relate.waitForExistence(timeout:2))
+        relate.tap()
+        XCTAssertTrue(app.staticTexts["関連付けたい位置をタップ"].exists)
+        let target = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:400))
+        target.tap()
+        XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
+        XCTAssertEqual(element(app,"experiment-note-R12を変更-anchor").value as? String,"700,400")
+    }
+
+    @MainActor
+    func testInspectorHasNoRotateOrRelateButtons() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        app.buttons["確認"].tap()
+        XCTAssertFalse(app.buttons["関連付けを開始"].exists)
+        app.navigationBars["インスペクタ"].swipeDown()
+        element(app,"symbol-Temperature").tap()
+        app.buttons["確認"].tap()
+        XCTAssertFalse(app.buttons["inspector-rotate"].exists)
+        XCTAssertFalse(app.buttons["回転"].exists)
+    }
+
+    @MainActor
     func testDeletingNoteDoesNotCrash() throws {
         let app = XCUIApplication()
         app.launch()
@@ -670,9 +731,6 @@ final class CircuitCanvasUITests: XCTestCase {
         let app = XCUIApplication(); app.launch()
         element(app,"symbol-Main MCU").tap()
         XCTAssertFalse(app.buttons["symbol-Main MCU-rotate"].exists)
-        app.buttons["確認"].tap()
-        XCTAssertFalse(app.buttons["inspector-rotate"].exists)
-        app.navigationBars["インスペクタ"].swipeDown()
         place(app,category:"受動部品",name:"抵抗",x:380,y:530)
         app.buttons["配線"].tap()
         app.buttons["symbol-Main MCU-pin-1"].tap()
@@ -692,12 +750,21 @@ final class CircuitCanvasUITests: XCTestCase {
             assertRoutesClear(app,count:4,extraSymbols:["抵抗"])
         }
         XCTAssertEqual(element(app,"circuit-canvas").value as? String,viewport)
+        // The rotate action lives only on the canvas now, not in the inspector; the inspector just shows state.
         app.buttons["確認"].tap()
+        XCTAssertFalse(app.buttons["inspector-rotate"].exists)
+        XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり")
+        app.navigationBars["インスペクタ"].swipeDown()
         for rotation in [90,180,270,0] {
-            app.buttons["inspector-rotate"].tap()
+            app.buttons["symbol-抵抗-rotate"].tap()
             XCTAssertEqual(element(app,"symbol-抵抗-rotation").value as? String,"\(rotation)")
-            XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり")
         }
+        app.buttons["確認"].tap()
+        XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり")
+        app.navigationBars["インスペクタ"].swipeDown()
+        element(app,"symbol-抵抗").tap()
+        if !app.buttons["symbol-抵抗-rotate"].waitForExistence(timeout:1) { element(app,"symbol-抵抗").tap() }
+        app.buttons["確認"].tap()
         app.buttons["シンボルを削除"].tap()
         XCTAssertFalse(element(app,"symbol-抵抗").exists)
         XCTAssertEqual(element(app,"wire-count").value as? String,"3")

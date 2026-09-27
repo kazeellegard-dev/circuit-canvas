@@ -6,19 +6,22 @@ enum SymbolCategory: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
-/// Resizing of block-diagram symbols: the height is a multiple of 30pt (one left/right pin slot per 30pt,
-/// so a pin can always be added without overflowing) and the width moves in 30pt steps.
-enum BlockSize {
-    static let step: CGFloat = 30
-    static let minimum = CGSize(width:90,height:30)
-    static let maximum = CGSize(width:300,height:180)
-    static let standard = CGSize(width:90,height:30)
-    static func snapped(_ proposed: CGSize) -> CGSize {
+/// Shared corner-drag resize math for anything sized in fixed steps within a min/max range (block-diagram
+/// symbols, experiment notes): snapping the size, moving the opposite corner, and the resize handle's hit square.
+enum ResizableGeometry {
+    static func snapped(_ proposed: CGSize, step: CGFloat, minimum: CGSize, maximum: CGSize) -> CGSize {
         func snap(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
             min(max(low + step * ((value - low) / step).rounded(), low), high)
         }
         return CGSize(width: snap(proposed.width, minimum.width, maximum.width),
                       height: snap(proposed.height, minimum.height, maximum.height))
+    }
+    /// Drag a corner (`sx`, `sy` = -1 left/top, +1 right/bottom) by `translation`; the opposite corner stays put.
+    static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize,
+                        step: CGFloat, minimum: CGSize, maximum: CGSize) -> (center: CGPoint, size: CGSize) {
+        let next = snapped(CGSize(width: size.width + sx * translation.width, height: size.height + sy * translation.height),
+                           step: step, minimum: minimum, maximum: maximum)
+        return (CGPoint(x: center.x + sx * (next.width - size.width) / 2, y: center.y + sy * (next.height - size.height) / 2), next)
     }
     /// Hit square of a corner handle, diagonally outside the corner so it ends at the top/bottom edge - clear of the
     /// 28pt pin squares - and stays 32pt on screen: below 100 % zoom the logical square grows by 1/scale.
@@ -27,10 +30,20 @@ enum BlockSize {
         let center = CGPoint(x: (sx < 0 ? body.minX : body.maxX) + sx * 12 * k, y: (sy < 0 ? body.minY : body.maxY) + sy * 16 * k)
         return CGRect(x: center.x - 16 * k, y: center.y - 16 * k, width: 32 * k, height: 32 * k)
     }
-    /// Drag a corner (`sx`, `sy` = -1 left/top, +1 right/bottom) by `translation`; the opposite corner stays put.
+}
+/// Resizing of block-diagram symbols: the height is a multiple of 30pt (one left/right pin slot per 30pt,
+/// so a pin can always be added without overflowing) and the width moves in 30pt steps.
+enum BlockSize {
+    static let step: CGFloat = 30
+    static let minimum = CGSize(width:90,height:30)
+    static let maximum = CGSize(width:300,height:180)
+    static let standard = CGSize(width:90,height:30)
+    static func snapped(_ proposed: CGSize) -> CGSize { ResizableGeometry.snapped(proposed, step:step, minimum:minimum, maximum:maximum) }
+    static func handleRect(body: CGRect, sx: CGFloat, sy: CGFloat, scale: CGFloat) -> CGRect {
+        ResizableGeometry.handleRect(body:body, sx:sx, sy:sy, scale:scale)
+    }
     static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
-        let next = snapped(CGSize(width: size.width + sx * translation.width, height: size.height + sy * translation.height))
-        return (CGPoint(x: center.x + sx * (next.width - size.width) / 2, y: center.y + sy * (next.height - size.height) / 2), next)
+        ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
     }
 }
 
