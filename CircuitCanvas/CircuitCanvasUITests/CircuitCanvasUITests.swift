@@ -344,10 +344,9 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
-    func testSettingsCanRenameCanvasEditDescriptionAndResetOnlyAfterConfirming() throws {
+    func testSettingsCanRenameCanvasAndEditAMultilineDescription() throws {
         let app = XCUIApplication(); app.launch()
         XCTAssertTrue(app.navigationBars["Circuit Canvas"].waitForExistence(timeout:3))
-        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:2))
 
         app.buttons["設定"].tap()
         XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
@@ -358,32 +357,50 @@ final class CircuitCanvasUITests: XCTestCase {
         let descriptionField = element(app,"settings-canvas-description")
         XCTAssertEqual(descriptionField.value as? String,"","the description must start out empty")
         descriptionField.tap()
-        descriptionField.typeText("テスト用の回路図")
+        descriptionField.typeText("1行目\n2行目")
         app.navigationBars["設定"].swipeDown()
         // The rename took effect (the app's own title), independently of the sheet being open.
         XCTAssertTrue(app.navigationBars["実験用基板"].waitForExistence(timeout:2))
         XCTAssertFalse(app.navigationBars["Circuit Canvas"].exists)
 
-        // Reopen once and do both the cancel and the confirm in this same session (no further dismiss/reopen
-        // in between), to avoid whatever made a third sheet reopen unreliable in this harness.
+        // Reopened, the multi-line description is still there.
         app.buttons["設定"].tap()
         XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
-        XCTAssertEqual(descriptionField.value as? String,"テスト用の回路図","the description must have been kept")
+        XCTAssertEqual(descriptionField.value as? String,"1行目\n2行目")
+    }
 
-        // Cancelling the reset confirmation must change nothing.
+    @MainActor
+    func testSettingsResetCancelledLeavesTheCanvasUntouched() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["設定"].tap()
+        XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
         app.buttons["settings-reset-canvas"].tap()
         XCTAssertTrue(app.staticTexts["本当にリセットしますか？元に戻せません。"].waitForExistence(timeout:2))
         app.buttons["キャンセル"].tap()
         XCTAssertFalse(app.staticTexts["本当にリセットしますか？元に戻せません。"].exists)
-        XCTAssertTrue(app.buttons["settings-reset-canvas"].waitForExistence(timeout:2),"still on the settings form, untouched")
+        app.navigationBars["設定"].swipeDown()
+        for name in ["24 V → 5 V","Main MCU","CAN","Temperature"] {
+            XCTAssertTrue(element(app,"symbol-\(name)").exists,"cancelling must not have touched \(name)")
+        }
+        XCTAssertTrue(element(app,"experiment-note-R12を変更").exists)
+        assertWireCount(app,"3")
+    }
 
-        // Confirming the reset clears symbols, wires, and notes.
+    @MainActor
+    func testSettingsResetConfirmedClearsSymbolsWiresAndNotes() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["設定"].tap()
+        XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
         app.buttons["settings-reset-canvas"].tap()
         XCTAssertTrue(app.staticTexts["本当にリセットしますか？元に戻せません。"].waitForExistence(timeout:2))
         app.buttons["リセット"].tap()
         XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
         app.navigationBars["設定"].swipeDown()
-        XCTAssertFalse(element(app,"symbol-24 V → 5 V").exists)
+        for name in ["24 V → 5 V","Main MCU","CAN","Temperature"] {
+            XCTAssertFalse(element(app,"symbol-\(name)").exists,"\(name) must be gone after a confirmed reset")
+        }
         XCTAssertFalse(element(app,"experiment-note-R12を変更").exists)
         assertWireCount(app,"0")
     }
