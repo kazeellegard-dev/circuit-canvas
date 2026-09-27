@@ -124,7 +124,11 @@ final class CircuitCanvasUITests: XCTestCase {
         app.navigationBars["インスペクタ"].swipeDown()
         let longTitle = element(app,"experiment-note-とても長いタイトルを二行に折り返して確認する")
         XCTAssertTrue(longTitle.waitForExistence(timeout:2))
-        XCTAssertLessThanOrEqual(longTitle.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","確認するための")).firstMatch.frame.maxY,longTitle.frame.maxY)
+        let longBody = longTitle.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","確認するための")).firstMatch
+        XCTAssertTrue(longBody.exists)
+        XCTAssertGreaterThan(longBody.frame.height,0,"the long body text must actually be laid out, not collapsed to zero height")
+        XCTAssertLessThanOrEqual(longBody.frame.maxY,longTitle.frame.maxY,"the long body text must not be clipped at the minimum size")
+        XCTAssertGreaterThanOrEqual(longBody.frame.minY,longTitle.frame.minY)
     }
 
     @MainActor
