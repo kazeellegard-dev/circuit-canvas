@@ -509,6 +509,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:3))
         // Every initial wire touches Main MCU; capture all three routes to check they come back exactly.
         let before = (0..<3).map { routePoints(app,$0) }
+        func routeSet(_ routes: [[CGPoint]]) -> Set<[String]> { Set(routes.map { $0.map { "\(Int($0.x)),\(Int($0.y))" } }) }
 
         element(app,"symbol-Main MCU").tap()
         app.buttons["確認"].tap()
@@ -521,33 +522,63 @@ final class CircuitCanvasUITests: XCTestCase {
         app.buttons["undo-button"].tap()
         XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:2))
         let after = (0..<3).map { routePoints(app,$0) }
-        XCTAssertEqual(Set(after.map { $0.map { "\(Int($0.x)),\(Int($0.y))" } }),
-                        Set(before.map { $0.map { "\(Int($0.x)),\(Int($0.y))" } }),
-                        "all three wires must be restored with their exact prior routes")
+        XCTAssertEqual(routeSet(after),routeSet(before),"all three wires must be restored with their exact prior routes")
+
+        // Redo (Codex minor, 4D round 2): deletes it again.
+        app.buttons["redo-button"].tap()
+        XCTAssertFalse(element(app,"symbol-Main MCU").waitForExistence(timeout:2))
+        XCTAssertFalse(element(app,"wire-0").exists,"redo must delete it again")
     }
 
     @MainActor
     func testUndoRedoOnWireSegmentDeletionStaysAvailableDuringEditMode() throws {
         let app = XCUIApplication(); app.launch()
         XCTAssertTrue(element(app,"wire-0").waitForExistence(timeout:3))
-        let before = routePoints(app,0)
+        // All segments of every current wire, as an unordered set of endpoint pairs (see the equivalent
+        // check in the 4C wire-deletion test) - used here to confirm the delete really happened, and that
+        // undo/redo reproduce the exact before/after states, not just "some wire changed".
+        func allSegments() -> Set<[CGPoint]> {
+            var result = Set<[CGPoint]>(); var i = 0
+            while element(app,"wire-\(i)").exists {
+                let points = routePoints(app,i)
+                for s in 0..<max(0,points.count-1) { result.insert([points[s],points[s+1]]) }
+                i += 1
+            }
+            return result
+        }
+        let before = allSegments()
         app.buttons["edit-mode-toggle"].tap()
         XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
         element(app,"edit-delete-wire-0-segment-0").tap()
+        let afterDelete = allSegments()
+        XCTAssertNotEqual(afterDelete,before,"the deletion must actually have changed something")
 
         // Undo is deliberately not greyed out by edit mode - this is exactly the safety net it is for.
         XCTAssertTrue(app.buttons["undo-button"].isEnabled)
         app.buttons["undo-button"].tap()
         XCTAssertTrue(element(app,"edit-mode-badge").exists,"undo must not itself leave edit mode")
-        XCTAssertTrue(element(app,"wire-0").waitForExistence(timeout:2))
-        XCTAssertEqual(routePoints(app,0),before)
+        XCTAssertEqual(allSegments(),before,"undo must restore every wire's exact prior segments")
+
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(allSegments(),afterDelete,"redo must reproduce the exact post-delete state")
     }
 
     @MainActor
     func testInspectorRenameAndAnIndependentActionAreSeparateUndoSteps() throws {
         let app = XCUIApplication(); app.launch()
         place(app,category:"ブロック",name:"汎用ブロック",x:600,y:550)
+        func size(_ title: String) -> [Double] { (element(app,"symbol-\(title)-size").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+
+        // Grow it first, so the later size reset actually changes something to undo/redo (Codex minor,
+        // 4D round 2).
         element(app,"symbol-汎用ブロック").tap()
+        let handle = element(app,"symbol-汎用ブロック-resize-br")
+        XCTAssertTrue(handle.waitForExistence(timeout:2))
+        let hstart = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        hstart.press(forDuration:0.1,thenDragTo:hstart.withOffset(CGVector(dx:60,dy:60)))
+        let grownSize = size("汎用ブロック")
+        XCTAssertNotEqual(grownSize,[90,30],"the drag must actually have grown it")
+
         app.buttons["確認"].tap()
         let nameField = app.textFields["名称"]
         XCTAssertTrue(nameField.waitForExistence(timeout:2))
@@ -560,12 +591,33 @@ final class CircuitCanvasUITests: XCTestCase {
         nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:5) + "B")
         app.navigationBars["インスペクタ"].swipeDown()
         XCTAssertTrue(element(app,"symbol-B").waitForExistence(timeout:2))
+        XCTAssertEqual(size("B"),[90,30],"reset-size must have taken effect")
 
-        // One undo must revert only the second rename, not bundle the size reset (or the first rename) into
-        // the same step (Codex major, 4D round 1).
+        // Undo #1: only the second rename (B→A) - the size reset must not be undone yet.
         app.buttons["undo-button"].tap()
         XCTAssertTrue(element(app,"symbol-A").waitForExistence(timeout:2),"one undo must revert only the second rename")
         XCTAssertFalse(element(app,"symbol-B").exists)
+        XCTAssertEqual(size("A"),[90,30])
+
+        // Undo #2: only the size reset - the name stays "A", the size grows back.
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-A").exists,"the name must still be A")
+        XCTAssertEqual(size("A"),grownSize,"the size reset must be undone on its own")
+
+        // Undo #3: the first rename - back to the name it was placed with.
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-汎用ブロック").waitForExistence(timeout:2))
+        XCTAssertEqual(size("汎用ブロック"),grownSize)
+
+        // Redo forward through all three steps, ending back where editing left off.
+        app.buttons["redo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-A").waitForExistence(timeout:2))
+        XCTAssertEqual(size("A"),grownSize)
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(size("A"),[90,30])
+        app.buttons["redo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-B").waitForExistence(timeout:2))
+        XCTAssertEqual(size("B"),[90,30])
     }
 
     @MainActor
