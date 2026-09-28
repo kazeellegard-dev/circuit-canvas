@@ -118,7 +118,7 @@ final class CircuitCanvasUITests: XCTestCase {
         let field = app.textFields["タイトル"]
         note.tap(); app.buttons["確認"].tap()
         field.tap(); field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + "とても長いタイトルを二行に折り返して確認する")
-        let bodyField = app.textFields.element(boundBy:1)
+        let bodyField = app.textViews["note-body-editor"]
         bodyField.tap()
         bodyField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:40) + "本文も長くして、最小サイズでどこまで読めるかを確認するための、長い説明文にする。")
         app.navigationBars["インスペクタ"].swipeDown()
@@ -403,6 +403,15 @@ final class CircuitCanvasUITests: XCTestCase {
         }
         XCTAssertFalse(element(app,"experiment-note-R12を変更").exists)
         assertWireCount(app,"0")
+        app.navigationBars["インスペクタ"].swipeDown()   // assertWireCount opens it but does not close it
+
+        // A reset also re-centres the viewport on the (now blank) canvas - easier to start drawing in any
+        // direction than starting at the canvas's top-left corner (feedback, 2026-09-29).
+        let viewport = (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+        let scale = Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan
+        let offset = (element(app,"canvas-offset-exact").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+        XCTAssertEqual(offset[0],viewport[0]/2 - 1200*scale,accuracy:1,"offsetX must centre canvas x=1200 (half of 2400) in the viewport")
+        XCTAssertEqual(offset[1],viewport[1]/2 - 900*scale,accuracy:1,"offsetY must centre canvas y=900 (half of 1800) in the viewport")
     }
 
     @MainActor
@@ -738,6 +747,60 @@ final class CircuitCanvasUITests: XCTestCase {
         // Once, then again on whatever is left (continued deletion without leaving edit mode).
         deleteOneSegmentAndVerify()
         deleteOneSegmentAndVerify()
+    }
+
+    @MainActor
+    func testAddSymbolButtonSwitchesLibraryTabToTheSelectedCategory() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        // selectedLibrary defaults to a block; switch the visible tab away from it first.
+        app.buttons["library-category-受動部品"].tap()
+        XCTAssertTrue(app.buttons["library-category-受動部品"].isSelected)
+        XCTAssertFalse(app.buttons["library-category-ブロック"].isSelected)
+
+        app.buttons["＋シンボル"].tap()
+        XCTAssertTrue(app.buttons["library-category-ブロック"].isSelected,"switching into symbol-placement mode must jump to the selected symbol's own category")
+        XCTAssertFalse(app.buttons["library-category-受動部品"].isSelected)
+    }
+
+    @MainActor
+    func testNewNoteDefaultsToMemoTypeAndIcon() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["＋メモ"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150)).tap()
+        XCTAssertTrue(element(app,"experiment-note-新しいメモ").waitForExistence(timeout:2))
+        // "note.text" is the メモ type's own default icon, and unique among the six types' default icons -
+        // a reliable proxy that the note was created with 種別=メモ, not the old 改造 default.
+        XCTAssertEqual(element(app,"experiment-note-新しいメモ-icon").value as? String,"note.text")
+    }
+
+    @MainActor
+    func testNoteEditButtonOpensTheInspectorDirectly() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        let edit = element(app,"experiment-note-R12を変更-edit")
+        XCTAssertTrue(edit.waitForExistence(timeout:2))
+        edit.tap()
+        XCTAssertTrue(app.navigationBars["インスペクタ"].waitForExistence(timeout:2))
+        XCTAssertTrue(app.staticTexts["付箋"].exists)
+    }
+
+    @MainActor
+    func testNoteBodyAcceptsMultilineText() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        app.buttons["確認"].tap()
+        let body = app.textViews["note-body-editor"]
+        XCTAssertTrue(body.waitForExistence(timeout:2))
+        body.tap()
+        // Return must insert a newline (not end editing) - a TextField(axis: .vertical) could not do this.
+        body.typeText("\n1行目\n2行目")
+        XCTAssertEqual(body.value as? String,"10 kΩへ変更して波形を再測定\n1行目\n2行目")
     }
 
     @MainActor

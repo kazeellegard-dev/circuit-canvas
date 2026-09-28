@@ -197,25 +197,16 @@ struct ContentView: View {
                         .disabled(editMode)
                     Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(editMode)
-                    Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol }
+                    // Jumps the library to whichever category the selected symbol is in, so it is visible
+                    // (and its highlight legible) instead of leaving whatever tab happened to be open before.
+                    Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol; selectedCategory = selectedLibrary.category }
                         .disabled(editMode)
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
                         .disabled(editMode)
-                    Menu {
-                        ForEach([25,50,100,150,200], id: \.self) { percent in
-                            Button("\(percent)%") { setZoom(CGFloat(percent)/100) }
-                                .accessibilityIdentifier("zoom-\(percent)")
-                        }
-                    } label: {
-                        Label("\(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .accessibilityIdentifier("zoom-menu")
-                    .disabled(editMode)
-                    Button("確認", systemImage: "slider.horizontal.3") { inspectorSessionPushed = false; showInspector = true }
-                        .disabled(editMode)
-                    Button("設定", systemImage: "gearshape") { showSettings = true }
-                        .disabled(editMode)
-                    Button(editMode ? "編集中" : "編集", systemImage: editMode ? "trash.circle.fill" : "trash.circle") {
+                    // The edit-mode toggle sits just left of "確認", per feedback on the toolbar's reading
+                    // order; its icon was changed from a trash can (which read oddly alongside the other
+                    // plain, uncoloured toolbar glyphs) to an eraser, which is red only while active.
+                    Button(editMode ? "編集中" : "編集", systemImage: editMode ? "eraser.fill" : "eraser") {
                         editMode.toggle()
                         // Edit mode has its own, exclusive UI (the ✗ badges); leave no other mode's state
                         // dangling underneath it, in either direction.
@@ -225,6 +216,10 @@ struct ContentView: View {
                     }
                     .tint(editMode ? .red : nil)
                     .accessibilityIdentifier("edit-mode-toggle")
+                    Button("確認", systemImage: "slider.horizontal.3") { inspectorSessionPushed = false; showInspector = true }
+                        .disabled(editMode)
+                    Button("設定", systemImage: "gearshape") { showSettings = true }
+                        .disabled(editMode)
                 }
             }
             .sheet(isPresented: $showInspector) { NavigationStack { inspector.navigationTitle("インスペクタ") } }
@@ -286,10 +281,13 @@ struct ContentView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
                     ForEach(SymbolCategory.allCases) { category in
+                        // A solid fill (not a faint tint) so the selected category is unambiguous at a
+                        // glance, per feedback that the previous highlight was too light to notice.
                         Button(category.rawValue) { selectedCategory = category }
-                            .font(.caption)
+                            .font(.caption.weight(selectedCategory == category ? .semibold : .regular))
+                            .foregroundStyle(selectedCategory == category ? Color.white : Color.primary)
                             .padding(8)
-                            .background(selectedCategory == category ? Color.accentColor.opacity(0.15) : .clear, in: Capsule())
+                            .background(selectedCategory == category ? Color.accentColor : Color.clear, in: Capsule())
                             .accessibilityIdentifier("library-category-\(category.rawValue)")
                             .accessibilityAddTraits(selectedCategory == category ? .isSelected : [])
                     }
@@ -309,7 +307,10 @@ struct ContentView: View {
                             }
                             .frame(width: 92, height: 72)
                             .foregroundStyle(selectedLibrary == kind ? Color.accentColor : Color.primary)
-                            .background(selectedLibrary == kind ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                            // A stronger fill plus a visible border - the previous 0.12-opacity tint alone
+                            // read as barely-there next to the unselected items (feedback, 2026-09-29).
+                            .background(selectedLibrary == kind ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selectedLibrary == kind ? Color.accentColor : Color.clear, lineWidth: 2))
                             .contentShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
@@ -326,6 +327,9 @@ struct ContentView: View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
                 Color.clear
+                    // Distinguishes "outside the canvas" from the canvas itself (which Grid, below, fills
+                    // opaquely) - addressing feedback that the valid drawing area was not visible at all.
+                    .background(Color(.systemGray4))
                     .contentShape(Rectangle())
                     .gesture(canvasPanGesture(in: proxy.size))
                     .simultaneousGesture(canvasTapGesture)
@@ -369,7 +373,6 @@ struct ContentView: View {
             .overlay(alignment: .topTrailing) {
                 zoomIndicator
                     .padding(12)
-                    .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomTrailing) {
                 // Exposes exactly the state setZoom(_:) itself uses, so a test can verify the viewport's
@@ -397,11 +400,23 @@ struct ContentView: View {
         }
     }
 
+    /// The on-canvas "倍率 n%" label doubles as the zoom menu's trigger (the toolbar used to carry a
+    /// separate icon button for this; removed once there were enough toolbar icons that it started to feel
+    /// crowded - tapping the existing, always-visible label is one fewer icon to make room for).
     private var zoomIndicator: some View {
-        Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
-            .font(.caption.weight(.medium))
-            .padding(8)
-            .background(.thinMaterial, in: Capsule())
+        Menu {
+            ForEach([25,50,100,150,200], id: \.self) { percent in
+                Button("\(percent)%") { setZoom(CGFloat(percent)/100) }
+                    .accessibilityIdentifier("zoom-\(percent)")
+            }
+        } label: {
+            Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
+                .font(.caption.weight(.medium))
+                .padding(8)
+                .background(.thinMaterial, in: Capsule())
+        }
+        .disabled(editMode)
+        .accessibilityIdentifier("zoom-menu")
     }
 
     private var canvasSize: CGSize { .init(width: 2_400, height: 1_800) }
@@ -667,6 +682,18 @@ struct ContentView: View {
                         .position(x:bounds.midX,y:bounds.minY-relateArm)
                         .accessibilityLabel("付箋を関連付け")
                         .accessibilityIdentifier("experiment-note-\(note.title)-relate")
+                        // A shortcut straight to the inspector for this note, next to relate - so editing
+                        // its content does not need a trip through "確認" first (feedback, 2026-09-29).
+                        Button { inspectorSessionPushed = false; showInspector = true } label: {
+                            Image(systemName:"square.and.pencil")
+                                .frame(width:relateSide,height:relateSide)
+                                .background(.regularMaterial,in:Circle())
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(x:bounds.midX+relateSide+6,y:bounds.minY-relateArm)
+                        .accessibilityLabel("付箋を編集")
+                        .accessibilityIdentifier("experiment-note-\(note.title)-edit")
                     }
                 }
 
@@ -685,7 +712,7 @@ struct ContentView: View {
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
-                else if tool == .note { pushUndo(); notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
+                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
                 else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
                 else { selectedNote = nil; selectedSymbol = nil }
             }
@@ -731,7 +758,12 @@ struct ContentView: View {
                     }
                     .accessibilityIdentifier("inspector-note-icon-picker")
                     TextField("タイトル", text: note.title)
-                    TextField("本文", text: note.body, axis: .vertical)
+                    // TextEditor, not TextField(axis: .vertical): the latter treats Return as "done editing"
+                    // rather than a newline, so multi-line/箇条書き content could not actually be typed
+                    // (feedback, 2026-09-29).
+                    TextEditor(text: note.body)
+                        .frame(minHeight: 120)
+                        .accessibilityIdentifier("note-body-editor")
                     Toggle("完了", isOn: note.complete)
                     Button("付箋を削除", role: .destructive) {
                         removeNote(id)
@@ -892,6 +924,19 @@ struct ContentView: View {
         selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         tool = .select
         reroute()
+        centerViewportOnCanvas()
+    }
+    /// Shows the canvas's own center, not its top-left corner - easier to start drawing in any direction
+    /// (feedback, 2026-09-29). Only called on reset, not on every launch: the seed diagram sits in the
+    /// canvas's upper-left quadrant, and dozens of existing UI tests assume it is on screen at launch
+    /// (scale=1, offset=0) - centering there would scroll it out of view and need a much larger rewrite. A
+    /// freshly reset (blank) canvas has nothing at risk of scrolling away, so centering only then gets the
+    /// requested "easy to start drawing" feel without that cost.
+    private func centerViewportOnCanvas() {
+        guard viewportSize != .zero else { return }
+        let canvasCenter = CGPoint(x: canvasSize.width/2, y: canvasSize.height/2)
+        canvasOffset = CGSize(width: viewportSize.width/2 - canvasCenter.x*canvasScale, height: viewportSize.height/2 - canvasCenter.y*canvasScale)
+        canvasPanOrigin = canvasOffset
     }
     // MARK: Undo / Redo (4D)
     /// Call right before a meaningful, undoable change (see this task's list: add/move/resize/rotate/
@@ -1292,7 +1337,22 @@ private struct NoteCard: View {
     }
 }
 
-private struct Grid: View { var body: some View { Canvas { context, size in var path = Path(); for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }; for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }; context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1) } } }
+/// Draws the grid, and - since it is exactly canvasSize, unlike the (larger, pannable) viewport behind it -
+/// also an opaque fill and border for the canvas's own bounds, so where "the canvas" actually ends is
+/// visible (feedback, 2026-09-29: "どこまでが有効な範囲かわかりません").
+private struct Grid: View {
+    var body: some View {
+        Canvas { context, size in
+            let bounds = CGRect(origin: .zero, size: size)
+            context.fill(Path(bounds), with: .color(Color(.systemBackground)))
+            var path = Path()
+            for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }
+            for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }
+            context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1)
+            context.stroke(Path(bounds), with: .color(.accentColor.opacity(0.6)), lineWidth: 3)
+        }
+    }
+}
 
 /// Categorised SF Symbols grid for choosing an icon (BlockIcon.categories for a block, NoteIcon.categories
 /// for a note); pushed from the inspector.
