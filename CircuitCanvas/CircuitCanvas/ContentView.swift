@@ -685,8 +685,8 @@ struct ContentView: View {
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
-                else if tool == .note { notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
-                else if tool == .symbol { symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
+                else if tool == .note { pushUndo(); notes.append(.init(title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
+                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
                 else { selectedNote = nil; selectedSymbol = nil }
             }
     }
@@ -708,7 +708,7 @@ struct ContentView: View {
                         LabeledContent("大きさ", value: "\(Int(symbol.wrappedValue.size.width)) × \(Int(symbol.wrappedValue.size.height))")
                         Button("元の大きさに戻す", systemImage:"arrow.counterclockwise") {
                             if let i = symbols.firstIndex(where: { $0.id == id }) {
-                                pushUndo()
+                                pushUndo(); inspectorSessionPushed = false
                                 // Same top-left corner, standard size (but never shorter than an added pin needs).
                                 let body = symbols[i].kind.body(at:symbols[i].position,rotation:0,size:symbols[i].size)
                                 let standard = CGSize(width: BlockSize.standard.width, height: max(BlockSize.standard.height, BlockSize.minimumHeight(for: symbols[i].blockPins)))
@@ -766,7 +766,7 @@ struct ContentView: View {
                 (wire.start.distance(to: start) < 1 && wire.end.distance(to: pin) < 1) ||
                 (wire.start.distance(to: pin) < 1 && wire.end.distance(to: start) < 1)
             }
-            if !alreadyExists { wires.append(.init(start: start, end: pin)); reroute() }
+            if !alreadyExists { pushUndo(); wires.append(.init(start: start, end: pin)); reroute() }
             pendingWireStart = nil
             tool = .select
         } else {
@@ -783,7 +783,15 @@ struct ContentView: View {
             get: { symbols.first(where: { $0.id == id }) ?? initial },
             set: { updated in
                 guard let index = symbols.firstIndex(where: { $0.id == id }) else { return }
-                if !inspectorSessionPushed { pushUndo(); inspectorSessionPushed = true }
+                // The icon picker is its own confirm action (Codex major, 4D round 1: mixing it into the
+                // same batch as a surrounding title edit made one Undo revert both at once) - not part of
+                // the same batch as continuous title typing. Ends that batch too, so typing again afterward
+                // starts a fresh one.
+                if symbols[index].icon != updated.icon {
+                    pushUndo(); inspectorSessionPushed = false
+                } else if !inspectorSessionPushed {
+                    pushUndo(); inspectorSessionPushed = true
+                }
                 symbols[index] = updated
             }
         )
@@ -794,7 +802,14 @@ struct ContentView: View {
             get: { notes.first(where: { $0.id == id }) ?? initial },
             set: { updated in
                 guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
-                if !inspectorSessionPushed { pushUndo(); inspectorSessionPushed = true }
+                let previous = notes[index]
+                // 種別・アイコン・完了 are each their own confirm action, not part of a surrounding title/body
+                // typing batch (Codex major, 4D round 1 - same reasoning as the block icon picker above).
+                if previous.type != updated.type || previous.icon != updated.icon || previous.complete != updated.complete {
+                    pushUndo(); inspectorSessionPushed = false
+                } else if !inspectorSessionPushed {
+                    pushUndo(); inspectorSessionPushed = true
+                }
                 notes[index] = updated
             }
         )
@@ -853,7 +868,7 @@ struct ContentView: View {
     }
     private func removeSymbol(_ id: UUID) {
         guard let symbol = symbols.first(where: { $0.id == id }) else { return }
-        pushUndo()
+        pushUndo(); inspectorSessionPushed = false
         let symbolPins = pins(for: symbol)
         wires.removeAll { wire in
             symbolPins.contains { pin in wire.start.distance(to: pin) < 1 || wire.end.distance(to: pin) < 1 }
@@ -863,7 +878,7 @@ struct ContentView: View {
     }
     private func removeNote(_ id: UUID) {
         guard notes.contains(where: { $0.id == id }) else { return }
-        pushUndo()
+        pushUndo(); inspectorSessionPushed = false
         selectedNote = nil
         linkingNote = nil
         if pendingRelateFrom?.id == id { pendingRelateFrom = nil }

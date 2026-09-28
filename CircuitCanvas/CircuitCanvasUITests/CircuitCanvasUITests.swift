@@ -449,15 +449,123 @@ final class CircuitCanvasUITests: XCTestCase {
         // 21 separate drags - each its own gesture, so each pushes its own undo step - oscillating a small
         // amount so the symbol (and so `start`, re-resolved against its current frame each time) never
         // drifts far from where it started.
+        var afterFirstMove: CGRect = .zero
         for i in 0..<21 {
             let dy: CGFloat = (i % 2 == 0) ? 6 : -6
             start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:0,dy:dy)))
+            if i == 0 { afterFirstMove = symbol.frame }
         }
         for step in 0..<20 {
             XCTAssertTrue(app.buttons["undo-button"].isEnabled,"step \(step)")
             app.buttons["undo-button"].tap()
         }
         XCTAssertFalse(app.buttons["undo-button"].isEnabled,"only 20 steps of history are kept - the 21st move's prior state was evicted")
+        // The earliest restorable state is right after the first move (its "before" snapshot was the one
+        // evicted), not the true original position (Codex minor, 4D round 1).
+        XCTAssertEqual(symbol.frame.origin.x,afterFirstMove.origin.x,accuracy:1)
+        XCTAssertEqual(symbol.frame.origin.y,afterFirstMove.origin.y,accuracy:1)
+    }
+
+    @MainActor
+    func testUndoRedoOnAddingASymbolANoteAndAWire() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+
+        // A symbol placed from the library (Codex major, 4D round 1: additions were not undoable at all).
+        place(app,category:"ブロック",name:"汎用ブロック",x:600,y:550)
+        XCTAssertTrue(element(app,"symbol-汎用ブロック").exists)
+        app.buttons["undo-button"].tap()
+        XCTAssertFalse(element(app,"symbol-汎用ブロック").exists,"undo must remove the just-placed symbol")
+        app.buttons["redo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-汎用ブロック").exists,"redo must bring it back")
+
+        // A note placed by tapping the canvas.
+        app.buttons["＋メモ"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150)).tap()
+        XCTAssertTrue(element(app,"experiment-note-新しいメモ").exists)
+        app.buttons["undo-button"].tap()
+        XCTAssertFalse(element(app,"experiment-note-新しいメモ").exists)
+        app.buttons["redo-button"].tap()
+        XCTAssertTrue(element(app,"experiment-note-新しいメモ").exists)
+
+        // A wire drawn between the new block's free pin and another symbol's free pin. assertWireCount opens
+        // the inspector but does not close it, so it is followed by a dismiss whenever more interaction with
+        // the canvas or toolbar comes after it.
+        func checkWireCount(_ n: String) { assertWireCount(app,n); app.navigationBars["インスペクタ"].swipeDown() }
+        checkWireCount("3")
+        app.buttons["配線"].tap()
+        app.buttons["symbol-汎用ブロック-pin-0"].tap()
+        app.buttons["symbol-24 V → 5 V-pin-0"].tap()
+        checkWireCount("4")
+        app.buttons["undo-button"].tap()
+        checkWireCount("3")
+        app.buttons["redo-button"].tap()
+        assertWireCount(app,"4")
+    }
+
+    @MainActor
+    func testUndoRedoOnDeletingAConnectedSymbolRestoresWireEndpointsAndRoutes() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:3))
+        // Every initial wire touches Main MCU; capture all three routes to check they come back exactly.
+        let before = (0..<3).map { routePoints(app,$0) }
+
+        element(app,"symbol-Main MCU").tap()
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.buttons["シンボルを削除"].waitForExistence(timeout:2))
+        app.buttons["シンボルを削除"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertFalse(element(app,"symbol-Main MCU").exists)
+        XCTAssertFalse(element(app,"wire-0").exists,"every wire touching Main MCU must be gone with it")
+
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:2))
+        let after = (0..<3).map { routePoints(app,$0) }
+        XCTAssertEqual(Set(after.map { $0.map { "\(Int($0.x)),\(Int($0.y))" } }),
+                        Set(before.map { $0.map { "\(Int($0.x)),\(Int($0.y))" } }),
+                        "all three wires must be restored with their exact prior routes")
+    }
+
+    @MainActor
+    func testUndoRedoOnWireSegmentDeletionStaysAvailableDuringEditMode() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"wire-0").waitForExistence(timeout:3))
+        let before = routePoints(app,0)
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
+        element(app,"edit-delete-wire-0-segment-0").tap()
+
+        // Undo is deliberately not greyed out by edit mode - this is exactly the safety net it is for.
+        XCTAssertTrue(app.buttons["undo-button"].isEnabled)
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"edit-mode-badge").exists,"undo must not itself leave edit mode")
+        XCTAssertTrue(element(app,"wire-0").waitForExistence(timeout:2))
+        XCTAssertEqual(routePoints(app,0),before)
+    }
+
+    @MainActor
+    func testInspectorRenameAndAnIndependentActionAreSeparateUndoSteps() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app,category:"ブロック",name:"汎用ブロック",x:600,y:550)
+        element(app,"symbol-汎用ブロック").tap()
+        app.buttons["確認"].tap()
+        let nameField = app.textFields["名称"]
+        XCTAssertTrue(nameField.waitForExistence(timeout:2))
+        nameField.tap()
+        nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + "A")
+        // An independent confirm action (here, resetting the size) in between two renames.
+        XCTAssertTrue(app.buttons["inspector-reset-size"].waitForExistence(timeout:2))
+        app.buttons["inspector-reset-size"].tap()
+        nameField.tap()
+        nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:5) + "B")
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertTrue(element(app,"symbol-B").waitForExistence(timeout:2))
+
+        // One undo must revert only the second rename, not bundle the size reset (or the first rename) into
+        // the same step (Codex major, 4D round 1).
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-A").waitForExistence(timeout:2),"one undo must revert only the second rename")
+        XCTAssertFalse(element(app,"symbol-B").exists)
     }
 
     @MainActor
