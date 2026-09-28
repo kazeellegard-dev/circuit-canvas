@@ -31,4 +31,11 @@
 
 - 実装（構造）としては、UIKit の `UIPanGestureRecognizer`（`minimumNumberOfTouches`/`maximumNumberOfTouches` を 2 に設定）を、ウィンドウ（画面全体の共通の親）に取り付け、`gestureRecognizerShouldBegin` でキャンバス領域内から始まったときだけ有効にする方式にした（`TwoFingerPanOverlay`）。取り付け自体が成功したことは、UI テストで確認している（`two-finger-pan-attached`）。
 - 実際に二本指でドラッグしてキャンバスが動くかどうかは、シミュレーター操作ツール（`touch2_path`）での目視確認を予定していたが、このセッションではシミュレーターへのアクセス許可がユーザーから得られておらず、確認できていない。実機・シミュレーターでの目視確認を、別途お願いしたい。
+- Codex レビュー（round 3）で、一本指パン（パンモード）と二本指パンが同じ `canvasOffset`/`canvasPanOrigin` を無条件に更新できる点、および編集ドラッグ側の抑止が開始時点のみだった点が major として指摘された。共有状態 `activePanSource`（`.singleFinger` / `.twoFinger` / `nil`）を追加し、どちらのパンも「自分が所有しているときだけ」更新・終了できるようにし、シンボル・付箋の移動、両方のリサイズ、線分ドラッグの開始も、この状態が非 nil の間は抑止するようにした（round 4 で承認、blocker/major 0）。
+
+## 結果
+
+2026-09-29、Codex レビュー round 4 で承認（blocker 0 / major 0 / minor 0 / 提案 1）。部分ゲート10件成功。
+提案（所有状態遷移の単体テスト化）は、時短方針により今回は見送り、必要になれば別途検討する。
+二本指ドラッグの実機・シミュレーターでの目視確認は、引き続きユーザー側にお願いしたい。
 
