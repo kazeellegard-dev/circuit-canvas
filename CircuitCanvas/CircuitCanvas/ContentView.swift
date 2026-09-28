@@ -127,6 +127,7 @@ struct ContentView: View {
     @State private var canvasScale: CGFloat = 1
     @State private var canvasScaleOrigin: CGFloat = 1
     @State private var viewportSize: CGSize = .zero   // kept up to date by `editor`'s GeometryReader, for the zoom menu
+    @State private var twoFingerPanAttached = false   // see TwoFingerPanOverlay.onAttached
     @State private var showLibrary = false
     @State private var showInspector = false
     @State private var showSettings = false
@@ -358,9 +359,8 @@ struct ContentView: View {
                         .gesture(canvasTapGesture)
                         .accessibilityIdentifier("relate-target-capture")
                 }
-                // Two fingers can always pan, regardless of tool (5B) - transparent to every single-finger
-                // touch (see PassThroughUnlessMultitouchView), so it never competes with the many one-finger
-                // gestures elsewhere on the canvas.
+                // Two fingers can always pan, regardless of tool (5B) - scoped to this frame (see
+                // TwoFingerPanOverlay's own documentation for why it must not simply overlay the canvas).
                 TwoFingerPanOverlay(
                     onChanged: { translation in
                         canvasOffset = boundedCanvasOffset(
@@ -368,8 +368,11 @@ struct ContentView: View {
                             in: proxy.size
                         )
                     },
-                    onEnded: { canvasPanOrigin = canvasOffset }
+                    onEnded: { canvasPanOrigin = canvasOffset },
+                    onAttached: { twoFingerPanAttached = true }
                 )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -391,6 +394,7 @@ struct ContentView: View {
                     else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
                     else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary.rawValue)を配置") }
                     else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
+                    else if tool == .pan { hint("arrow.up.and.down.and.arrow.left.and.right", "ドラッグしてキャンバスを移動") }
                 }.padding(16).allowsHitTesting(false)
             }
             .overlay(alignment: .topTrailing) {
@@ -416,6 +420,13 @@ struct ContentView: View {
                 Text("canvasOffsetExact").font(.system(size:1)).opacity(0.01)
                     .accessibilityIdentifier("canvas-offset-exact")
                     .accessibilityValue(String(format:"%.3f,%.3f",canvasOffset.width,canvasOffset.height))
+                    .allowsHitTesting(false)
+                // Whether the two-finger pan recognizer actually attached to a window - the structural half
+                // of 5B a UI test can confirm; XCUITest has no public API to synthesize a genuine two-finger
+                // pan itself (only tap and pinch have dedicated methods).
+                Text("twoFingerPanAttached").font(.system(size:1)).opacity(0.01)
+                    .accessibilityIdentifier("two-finger-pan-attached")
+                    .accessibilityValue(twoFingerPanAttached ? "true" : "false")
                     .allowsHitTesting(false)
             }
             .onAppear { viewportSize = proxy.size }
@@ -1383,56 +1394,96 @@ private struct Grid: View {
     }
 }
 
-/// Lets a lone single-finger touch fall straight through to whatever SwiftUI view is beneath it, and claims
-/// only a second (or later) simultaneous touch. `event.allTouches` reflects every touch UIKit is currently
-/// tracking at the moment a *new* touch is hit-tested, so the very first finger down is always evaluated
-/// with count 1 (pass-through, permanently - an already-tracked touch is not re-hit-tested as it moves) and
-/// only a second finger joining is evaluated with count 2 (claimed).
-private final class PassThroughUnlessMultitouchView: UIView {
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let event, (event.allTouches?.count ?? 0) >= 2 else { return nil }
-        return super.hitTest(point, with: event)
+/// A zero-size marker view, only used to reach its own `window` once attached (see WindowAttachingView
+/// below) and as the coordinate space to test whether a gesture started over the canvas.
+private final class WindowAttachingView: UIView {
+    var onWindowAvailable: ((UIView) -> Void)?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { onWindowAvailable?(self) }
     }
 }
 
-/// Two-finger-only pan (5B), available regardless of the active tool. Built on UIKit rather than a SwiftUI
-/// gesture: SwiftUI has no "exactly N fingers" drag gesture, and DragGesture always tracks whichever finger
-/// touched down first, which is exactly what must be avoided here (see PassThroughUnlessMultitouchView).
+/// Two-finger-only pan (5B), available regardless of the active tool, anywhere over the canvas. Built on
+/// UIKit rather than a SwiftUI gesture: SwiftUI has no "exactly N fingers" drag gesture, and DragGesture
+/// always tracks whichever finger touched down first.
+///
+/// The recognizer is attached to the *window*, not to this representable's own small view: UIKit only
+/// delivers touches to the recognizers on the hit-tested view and its ancestors, not to unrelated sibling
+/// views - a recognizer sitting on a sibling overlay never sees the first finger at all once a single-finger
+/// touch has already been dispatched to a symbol/wire/background view elsewhere in the tree (Codex major,
+/// 5B round 1: minimumNumberOfTouches=2 could never be satisfied that way). The window is a true ancestor of
+/// every touch in the app, so both fingers reach it regardless of which view underneath was hit-tested.
+/// `gestureRecognizerShouldBegin` then scopes it back down to only the canvas's own area, and
+/// `cancelsTouchesInView = false` plus the simultaneous-recognition delegate keep every single-finger
+/// gesture, and the canvas's own two-finger pinch-to-zoom, working exactly as before.
 private struct TwoFingerPanOverlay: UIViewRepresentable {
     let onChanged: (CGSize) -> Void
     let onEnded: () -> Void
+    /// Fires once the recognizer has actually been added to a window. XCUITest has no public API to
+    /// synthesize a genuine two-finger pan (only tap and pinch have dedicated methods), so this is the one
+    /// part of the wiring a UI test can still confirm: that attachment itself succeeded, not left silently
+    /// failing (Codex major, 5B round 1, was exactly a silent wiring failure of this kind).
+    var onAttached: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> UIView {
-        let view = PassThroughUnlessMultitouchView()
+        let view = WindowAttachingView()
         view.backgroundColor = .clear
-        let recognizer = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        recognizer.minimumNumberOfTouches = 2
-        recognizer.maximumNumberOfTouches = 2
-        recognizer.delegate = context.coordinator
-        view.addGestureRecognizer(recognizer)
+        view.isUserInteractionEnabled = false   // never itself a hit-test target; only a scope/anchor
+        view.onWindowAvailable = { [coordinator = context.coordinator] scopeView in
+            coordinator.attachIfNeeded(scopeView: scopeView)
+        }
         return view
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded) }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if let scopeView = uiView.window != nil ? uiView : nil {
+            context.coordinator.attachIfNeeded(scopeView: scopeView)
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded, onAttached: onAttached) }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let onChanged: (CGSize) -> Void
         let onEnded: () -> Void
-        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void) {
-            self.onChanged = onChanged; self.onEnded = onEnded
+        let onAttached: (() -> Void)?
+        private weak var scopeView: UIView?
+        private var didAttach = false
+        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, onAttached: (() -> Void)?) {
+            self.onChanged = onChanged; self.onEnded = onEnded; self.onAttached = onAttached
+        }
+        func attachIfNeeded(scopeView: UIView) {
+            self.scopeView = scopeView
+            guard !didAttach, let window = scopeView.window else { return }
+            didAttach = true
+            let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+            recognizer.minimumNumberOfTouches = 2
+            recognizer.maximumNumberOfTouches = 2
+            recognizer.delegate = self
+            recognizer.cancelsTouchesInView = false
+            window.addGestureRecognizer(recognizer)
+            onAttached?()
         }
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let window = recognizer.view else { return }
             switch recognizer.state {
             case .changed:
-                let t = recognizer.translation(in: recognizer.view)
+                let t = recognizer.translation(in: window)
                 onChanged(CGSize(width: t.x, height: t.y))
             case .ended, .cancelled, .failed:
                 onEnded()
             default: break
             }
         }
-        // Lets this coexist with the canvas's own pinch-to-zoom (also two-finger) rather than one stealing
-        // the gesture from the other.
+        // Only a gesture that actually starts over the canvas's own area should pan it - the recognizer
+        // itself is window-wide so it can see both fingers regardless of which view was hit-tested.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let scopeView else { return false }
+            let point = gestureRecognizer.location(in: scopeView)
+            return scopeView.bounds.contains(point)
+        }
+        // Lets this coexist with every single-finger gesture already tracking a touch it also observes, and
+        // with the canvas's own pinch-to-zoom (also two-finger), rather than one stealing the gesture from
+        // the other.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     }
 }

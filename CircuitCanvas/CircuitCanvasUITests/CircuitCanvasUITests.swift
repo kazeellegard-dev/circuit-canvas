@@ -1015,20 +1015,41 @@ final class CircuitCanvasUITests: XCTestCase {
     @MainActor
     func testOperationHintStaysFixedDuringZoomAndPan() {
         let app = XCUIApplication(); app.launch()
+        let canvas = element(app, "circuit-canvas")
         for button in ["配線", "＋メモ", "＋シンボル"] {
             app.buttons[button].tap()
             let hint = element(app, "operation-hint")
             XCTAssertTrue(hint.exists)
             let original = hint.frame
-            let canvas = element(app, "circuit-canvas")
+            let beforeOffset = canvas.value as? String
+            // A pinch here is best-effort only: XCUITest's synthetic pinch has been unreliable in this
+            // harness (see the note on testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale) - the
+            // real guarantee for this comes from setZoom(_:)'s own tests.
             canvas.pinch(withScale: 0.5, velocity: -1)
             let source = canvas.coordinate(withNormalizedOffset: CGVector(dx:0.8,dy:0.8))
+            // These tools no longer pan on a one-finger drag at all (5B, 2026-09-29 feedback) - confirming
+            // that (not just that the hint didn't move) is what makes this a meaningful regression guard now.
             source.press(forDuration:0.1,thenDragTo:source.withOffset(CGVector(dx:-60,dy:-50)))
+            XCTAssertEqual(canvas.value as? String,beforeOffset,"\(button) must not pan on a one-finger drag")
             XCTAssertEqual(hint.frame.minX,original.minX,accuracy:1)
             XCTAssertEqual(hint.frame.minY,original.minY,accuracy:1)
             XCTAssertEqual(hint.frame.width,original.width,accuracy:1)
             XCTAssertEqual(hint.frame.height,original.height,accuracy:1)
         }
+
+        // A genuine, reliably-testable pan: the dedicated pan tool, one finger (two-finger pan itself has no
+        // public XCUITest API to synthesize - see TwoFingerPanOverlay's own tests).
+        XCTAssertTrue(app.buttons["pan-mode-toggle"].waitForExistence(timeout:2))
+        app.buttons["pan-mode-toggle"].tap()
+        let hint = element(app,"operation-hint")
+        XCTAssertTrue(hint.waitForExistence(timeout:2))
+        let original = hint.frame
+        let beforeOffset = canvas.value as? String
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150))
+        source.press(forDuration:0.1,thenDragTo:source.withOffset(CGVector(dx:-60,dy:-50)))
+        XCTAssertNotEqual(canvas.value as? String,beforeOffset,"the pan tool must actually have panned")
+        XCTAssertEqual(hint.frame.minX,original.minX,accuracy:1,"the hint must stay fixed during a real pan")
+        XCTAssertEqual(hint.frame.minY,original.minY,accuracy:1)
     }
 
     @MainActor
@@ -1338,6 +1359,20 @@ final class CircuitCanvasUITests: XCTestCase {
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
         XCTAssertEqual(routePoints(app,2),before)
         XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=0, offsetY=-97")
+    }
+
+    @MainActor
+    func testTwoFingerPanRecognizerAttachesToTheWindow() throws {
+        // XCUITest has no public API to synthesize a genuine two-finger pan (only tap and pinch have
+        // dedicated methods), so this is the one part of the fix for the Codex major (5B round 1: the
+        // recognizer's minimumNumberOfTouches=2 could never be satisfied, because it was attached to a
+        // sibling overlay that never received the first of two fingers) a UI test can actually confirm:
+        // that the recognizer attached to a window at all, not left silently failing the same way again.
+        // The behaviour itself (does a real two-finger drag pan the canvas) needs manual/simulator-tool
+        // verification instead - see this task's doc for how that was recorded.
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"two-finger-pan-attached").waitForExistence(timeout:3))
+        XCTAssertEqual(element(app,"two-finger-pan-attached").value as? String,"true")
     }
 
     @MainActor
