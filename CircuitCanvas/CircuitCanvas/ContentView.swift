@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 private enum ResizeCorner: String, CaseIterable, Identifiable {
     case tl, tr, bl, br
@@ -29,7 +30,7 @@ private enum NoteSize {
         ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
     }
 }
-private enum Tool { case select, symbol, note, wire }
+private enum Tool { case select, symbol, note, wire, pan }
 /// What the ✗ badge (edit mode, 4C) is about to delete, pending its confirmation alert.
 private enum EditDeleteTarget: Identifiable {
     case symbol(UUID), note(UUID)
@@ -203,6 +204,15 @@ struct ContentView: View {
                         .disabled(editMode)
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
                         .disabled(editMode)
+                    // A dedicated pan tool (2026-09-29 feedback): one-finger drag on empty canvas otherwise
+                    // does nothing (see canvasPanGesture) - too easy to nudge the canvas by accident while
+                    // trying to grab a wire lead. Two fingers can always pan regardless of tool (below).
+                    Button(tool == .pan ? "キャンバス移動中" : "キャンバス移動", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
+                        tool = .pan; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+                    }
+                    .tint(tool == .pan ? .accentColor : nil)
+                    .disabled(editMode)
+                    .accessibilityIdentifier("pan-mode-toggle")
                     // The edit-mode toggle sits just left of "確認", per feedback on the toolbar's reading
                     // order; its icon was changed from a trash can (which read oddly alongside the other
                     // plain, uncoloured toolbar glyphs) to an eraser, which is red only while active.
@@ -348,6 +358,19 @@ struct ContentView: View {
                         .gesture(canvasTapGesture)
                         .accessibilityIdentifier("relate-target-capture")
                 }
+                // Two fingers can always pan, regardless of tool (5B) - transparent to every single-finger
+                // touch (see PassThroughUnlessMultitouchView), so it never competes with the many one-finger
+                // gestures elsewhere on the canvas.
+                TwoFingerPanOverlay(
+                    onChanged: { translation in
+                        canvasOffset = boundedCanvasOffset(
+                            CGSize(width: canvasPanOrigin.width + translation.width, height: canvasPanOrigin.height + translation.height),
+                            in: proxy.size
+                        )
+                    },
+                    onEnded: { canvasPanOrigin = canvasOffset }
+                )
+                .accessibilityHidden(true)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .coordinateSpace(name: "editorViewport")
@@ -964,6 +987,11 @@ struct ContentView: View {
         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         dragOrigins = [:]; noteDragOrigins = [:]; resizeDrag = nil; noteResizeDrag = nil; segmentDrag = nil
     }
+    /// One-finger drag on empty canvas. Per feedback (2026-09-29): grabbing a wire lead too close to the
+    /// background used to pan the canvas instead far too easily. One finger now only ever does two things -
+    /// drag a wire segment (unchanged, still tool == .select only), or pan while the dedicated "キャンバス移
+    /// 動" tool is active - never an incidental pan from any other tool. Two fingers can always pan, via the
+    /// separate TwoFingerPanOverlay below, regardless of tool.
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
             .onChanged { value in
@@ -971,12 +999,13 @@ struct ContentView: View {
                 // background. Resolve once at touch-down and retain that choice.
                 if segmentDrag == nil && !isPanningCanvas {
                     beginSegmentDrag(at: value.startLocation, translation: value.translation)
-                    isPanningCanvas = segmentDrag == nil
+                    isPanningCanvas = segmentDrag == nil && tool == .pan
                 }
                 if segmentDrag != nil {
                     updateSegmentDrag(translation: value.translation)
                     return
                 }
+                guard tool == .pan else { return }
                 canvasOffset = boundedCanvasOffset(
                     CGSize(width: canvasPanOrigin.width + value.translation.width, height: canvasPanOrigin.height + value.translation.height),
                     in: viewportSize
@@ -1351,6 +1380,60 @@ private struct Grid: View {
             context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1)
             context.stroke(Path(bounds), with: .color(.accentColor.opacity(0.6)), lineWidth: 3)
         }
+    }
+}
+
+/// Lets a lone single-finger touch fall straight through to whatever SwiftUI view is beneath it, and claims
+/// only a second (or later) simultaneous touch. `event.allTouches` reflects every touch UIKit is currently
+/// tracking at the moment a *new* touch is hit-tested, so the very first finger down is always evaluated
+/// with count 1 (pass-through, permanently - an already-tracked touch is not re-hit-tested as it moves) and
+/// only a second finger joining is evaluated with count 2 (claimed).
+private final class PassThroughUnlessMultitouchView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let event, (event.allTouches?.count ?? 0) >= 2 else { return nil }
+        return super.hitTest(point, with: event)
+    }
+}
+
+/// Two-finger-only pan (5B), available regardless of the active tool. Built on UIKit rather than a SwiftUI
+/// gesture: SwiftUI has no "exactly N fingers" drag gesture, and DragGesture always tracks whichever finger
+/// touched down first, which is exactly what must be avoided here (see PassThroughUnlessMultitouchView).
+private struct TwoFingerPanOverlay: UIViewRepresentable {
+    let onChanged: (CGSize) -> Void
+    let onEnded: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PassThroughUnlessMultitouchView()
+        view.backgroundColor = .clear
+        let recognizer = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        recognizer.minimumNumberOfTouches = 2
+        recognizer.maximumNumberOfTouches = 2
+        recognizer.delegate = context.coordinator
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let onChanged: (CGSize) -> Void
+        let onEnded: () -> Void
+        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void) {
+            self.onChanged = onChanged; self.onEnded = onEnded
+        }
+        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            switch recognizer.state {
+            case .changed:
+                let t = recognizer.translation(in: recognizer.view)
+                onChanged(CGSize(width: t.x, height: t.y))
+            case .ended, .cancelled, .failed:
+                onEnded()
+            default: break
+            }
+        }
+        // Lets this coexist with the canvas's own pinch-to-zoom (also two-finger) rather than one stealing
+        // the gesture from the other.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     }
 }
 

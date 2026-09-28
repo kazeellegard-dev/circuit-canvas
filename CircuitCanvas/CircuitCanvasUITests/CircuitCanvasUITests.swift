@@ -1331,9 +1331,40 @@ final class CircuitCanvasUITests: XCTestCase {
         let before = routePoints(app,2)
         let canvas = element(app,"circuit-canvas")
         let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:291,dy:473))
+        // One-finger drag on blank canvas only pans while the dedicated pan tool is active (5B, 2026-09-29
+        // feedback) - the underlying concern this test guards, that a drag starting on blank space but
+        // visually crossing a wire's path must not grab that wire, is unchanged and still checked below.
+        app.buttons["pan-mode-toggle"].tap()
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:0,dy:-97)))
         XCTAssertEqual(routePoints(app,2),before)
         XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=0, offsetY=-97")
+    }
+
+    @MainActor
+    func testPanModeToggleEnablesThenDisablesOneFingerCanvasPanning() throws {
+        let app = XCUIApplication(); app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        app.buttons["pan-mode-toggle"].tap()
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-60,dy:40)))
+        XCTAssertEqual(canvas.value as? String,"scale=100, offsetX=-60, offsetY=40")
+
+        // Switching to another tool leaves pan mode; one-finger drags stop panning again.
+        app.buttons["選択"].tap()
+        let before = canvas.value as? String
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-40,dy:20)))
+        XCTAssertEqual(canvas.value as? String,before,"leaving pan mode must stop one-finger panning")
+    }
+
+    @MainActor
+    func testOneFingerDragOnBlankCanvasDoesNothingOutsidePanMode() {
+        let app = XCUIApplication(); app.launch()
+        let canvas = element(app,"circuit-canvas")
+        let before = canvas.value as? String
+        let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150))
+        source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-80,dy:60)))
+        XCTAssertEqual(canvas.value as? String,before,"a one-finger drag must not pan unless the pan tool is active")
     }
 
     @MainActor
