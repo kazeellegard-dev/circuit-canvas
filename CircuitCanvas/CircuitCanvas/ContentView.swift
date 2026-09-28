@@ -127,6 +127,14 @@ struct ContentView: View {
     private var isEditDragActive: Bool {
         !dragOrigins.isEmpty || !noteDragOrigins.isEmpty || resizeDrag != nil || noteResizeDrag != nil || segmentDrag != nil
     }
+    /// Which of the two mutually-exclusive ways of panning (5B: pan-tool one-finger drag, or a two-finger
+    /// drag anywhere) currently owns canvasOffset/canvasPanOrigin. Only one may update them at a time -
+    /// without this, both ending independently (each setting canvasPanOrigin = canvasOffset) while the other
+    /// is still tracking a touch would double-apply translation and make the canvas jump (Codex major, 5B
+    /// round 3). Every single-finger edit drag (move/resize/segment) also refuses to start or continue while
+    /// this is non-nil, for the same reason in the other direction.
+    private enum PanSource { case singleFinger, twoFinger }
+    @State private var activePanSource: PanSource?
     @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
@@ -368,14 +376,24 @@ struct ContentView: View {
                 // Two fingers can always pan, regardless of tool (5B) - scoped to this frame (see
                 // TwoFingerPanOverlay's own documentation for why it must not simply overlay the canvas).
                 TwoFingerPanOverlay(
+                    onBegan: {
+                        guard activePanSource == nil else { return }
+                        activePanSource = .twoFinger
+                        canvasPanOrigin = canvasOffset
+                    },
                     onChanged: { translation in
+                        guard activePanSource == .twoFinger else { return }
                         canvasOffset = boundedCanvasOffset(
                             CGSize(width: canvasPanOrigin.width + translation.width, height: canvasPanOrigin.height + translation.height),
                             in: proxy.size
                         )
                     },
-                    onEnded: { canvasPanOrigin = canvasOffset },
-                    isEditDragActive: { isEditDragActive },
+                    onEnded: {
+                        guard activePanSource == .twoFinger else { return }
+                        canvasPanOrigin = canvasOffset
+                        activePanSource = nil
+                    },
+                    isEditDragActive: { isEditDragActive || activePanSource == .singleFinger },
                     onAttached: { twoFingerPanAttached = true }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -901,7 +919,7 @@ struct ContentView: View {
         reroute()
     }
     private func resizeNote(noteID: UUID, corner: ResizeCorner, translation: CGSize) {
-        guard let i = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        guard activePanSource == nil, let i = notes.firstIndex(where: { $0.id == noteID }) else { return }
         if noteResizeDrag?.id != noteID { pushUndo() }
         let origin = noteResizeDrag?.id == noteID ? noteResizeDrag! : ResizeDrag(id: noteID, center: notes[i].position, size: notes[i].size)
         noteResizeDrag = origin
@@ -916,7 +934,7 @@ struct ContentView: View {
         symbols[i].blockPins.append(pin)
     }
     private func resize(symbolID: UUID, corner: ResizeCorner, translation: CGSize) {
-        guard let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
+        guard activePanSource == nil, let i = symbols.firstIndex(where: { $0.id == symbolID }), symbols[i].kind.isBlock else { return }
         if resizeDrag?.id != symbolID { pushUndo() }
         let origin = resizeDrag?.id == symbolID ? resizeDrag! : ResizeDrag(id: symbolID, center: symbols[i].position, size: symbols[i].size)
         resizeDrag = origin
@@ -1017,20 +1035,21 @@ struct ContentView: View {
                 // background. Resolve once at touch-down and retain that choice.
                 if segmentDrag == nil && !isPanningCanvas {
                     beginSegmentDrag(at: value.startLocation, translation: value.translation)
-                    isPanningCanvas = segmentDrag == nil && tool == .pan
+                    isPanningCanvas = segmentDrag == nil && tool == .pan && activePanSource == nil
+                    if isPanningCanvas { activePanSource = .singleFinger }
                 }
                 if segmentDrag != nil {
                     updateSegmentDrag(translation: value.translation)
                     return
                 }
-                guard tool == .pan else { return }
+                guard tool == .pan, activePanSource == .singleFinger else { return }
                 canvasOffset = boundedCanvasOffset(
                     CGSize(width: canvasPanOrigin.width + value.translation.width, height: canvasPanOrigin.height + value.translation.height),
                     in: viewportSize
                 )
             }
             .onEnded { _ in
-                canvasPanOrigin = canvasOffset
+                if activePanSource == .singleFinger { canvasPanOrigin = canvasOffset; activePanSource = nil }
                 segmentDrag = nil
                 isPanningCanvas = false
             }
@@ -1063,7 +1082,7 @@ struct ContentView: View {
         canvasPanOrigin = canvasOffset
     }
     private func move(symbolID: UUID, by translation: CGSize) {
-        guard let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
+        guard activePanSource == nil, let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
         if dragOrigins[symbolID] == nil { pushUndo() }
         let origin = dragOrigins[symbolID] ?? symbols[index].position
         dragOrigins[symbolID] = origin
@@ -1080,7 +1099,7 @@ struct ContentView: View {
         reroute()
     }
     private func move(noteID: UUID, by translation: CGSize) {
-        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        guard activePanSource == nil, let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
         if noteDragOrigins[noteID] == nil { pushUndo() }
         let origin = noteDragOrigins[noteID] ?? notes[index].position
         noteDragOrigins[noteID] = origin
@@ -1174,7 +1193,7 @@ struct ContentView: View {
         if let back { wires.append(WireItem(start: back.first!, end: back.last!, points: back, manual: true, manualPoints: back)) }
     }
     private func beginSegmentDrag(at viewportPoint: CGPoint, translation: CGSize) {
-        guard tool == .select, !editMode, segmentDrag == nil,
+        guard tool == .select, !editMode, segmentDrag == nil, activePanSource == nil,
               let hit = WireRouting.nearestInteriorSegment(
                 to: canvasPoint(from: viewportPoint), paths: wires.map(\.points), maximumDistance: 8, translation: translation
               ) else { return }
@@ -1425,6 +1444,11 @@ private final class WindowAttachingView: UIView {
 /// `cancelsTouchesInView = false` plus the simultaneous-recognition delegate keep every single-finger
 /// gesture, and the canvas's own two-finger pinch-to-zoom, working exactly as before.
 private struct TwoFingerPanOverlay: UIViewRepresentable {
+    /// Fires once, when the recognizer actually transitions to .began - lets the caller claim the shared
+    /// activePanSource before the first onChanged arrives (Codex major, 5B round 3: nothing previously
+    /// stopped a single-finger edit drag from starting *during* an already-active two-finger pan, since
+    /// isEditDragActive was only consulted at the two-finger gesture's own start).
+    var onBegan: () -> Void = {}
     let onChanged: (CGSize) -> Void
     let onEnded: () -> Void
     /// Whether a single-finger edit drag (symbol/note move, either resize, a wire segment) is already
@@ -1450,6 +1474,7 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
         // Refreshed on every update, not just captured once at makeCoordinator time: onChanged closes over
         // this render's viewportSize (for boundedCanvasOffset), which can change (rotation, split view) -
         // Codex minor, 5B round 2.
+        context.coordinator.onBegan = onBegan
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.isEditDragActive = isEditDragActive
@@ -1457,17 +1482,18 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
             context.coordinator.attachIfNeeded(scopeView: scopeView)
         }
     }
-    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded, isEditDragActive: isEditDragActive, onAttached: onAttached) }
+    func makeCoordinator() -> Coordinator { Coordinator(onBegan: onBegan, onChanged: onChanged, onEnded: onEnded, isEditDragActive: isEditDragActive, onAttached: onAttached) }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onBegan: () -> Void
         var onChanged: (CGSize) -> Void
         var onEnded: () -> Void
         var isEditDragActive: () -> Bool
         let onAttached: (() -> Void)?
         private weak var scopeView: UIView?
         private var didAttach = false
-        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, isEditDragActive: @escaping () -> Bool, onAttached: (() -> Void)?) {
-            self.onChanged = onChanged; self.onEnded = onEnded; self.isEditDragActive = isEditDragActive; self.onAttached = onAttached
+        init(onBegan: @escaping () -> Void, onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, isEditDragActive: @escaping () -> Bool, onAttached: (() -> Void)?) {
+            self.onBegan = onBegan; self.onChanged = onChanged; self.onEnded = onEnded; self.isEditDragActive = isEditDragActive; self.onAttached = onAttached
         }
         func attachIfNeeded(scopeView: UIView) {
             self.scopeView = scopeView
@@ -1484,6 +1510,8 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard let window = recognizer.view else { return }
             switch recognizer.state {
+            case .began:
+                onBegan()
             case .changed:
                 let t = recognizer.translation(in: window)
                 onChanged(CGSize(width: t.x, height: t.y))

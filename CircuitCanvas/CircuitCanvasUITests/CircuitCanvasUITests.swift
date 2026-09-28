@@ -1021,15 +1021,17 @@ final class CircuitCanvasUITests: XCTestCase {
             let hint = element(app, "operation-hint")
             XCTAssertTrue(hint.exists)
             let original = hint.frame
-            // Just the offset, not the whole -value string: a successful pinch right below legitimately
-            // changes the scale portion of that string, which must not fail this "did not pan" check
-            // (Codex major, 5B round 2 - the previous whole-string comparison could fail on a working pinch
-            // even with zero pan).
-            let beforeOffset = element(app,"canvas-offset-exact").value as? String
             // A pinch here is best-effort only: XCUITest's synthetic pinch has been unreliable in this
             // harness (see the note on testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale) - the
             // real guarantee for this comes from setZoom(_:)'s own tests.
             canvas.pinch(withScale: 0.5, velocity: -1)
+            // Captured after the pinch, not before: the two-finger pan recognizer and the pinch gesture are
+            // allowed to recognize simultaneously, so a successful pinch can itself move canvasOffset (its
+            // center may not land exactly on the anchor) - comparing against a pre-pinch baseline would blame
+            // that legitimate movement on the one-finger drag below (Codex minor, 5B round 3). Just the
+            // offset, not the whole -value string: the pinch also legitimately changes the scale portion,
+            // which must not fail this "did not pan" check either (Codex major, 5B round 2).
+            let beforeOffset = element(app,"canvas-offset-exact").value as? String
             let source = canvas.coordinate(withNormalizedOffset: CGVector(dx:0.8,dy:0.8))
             // These tools no longer pan on a one-finger drag at all (5B, 2026-09-29 feedback) - confirming
             // that (not just that the hint didn't move) is what makes this a meaningful regression guard now.
