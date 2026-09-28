@@ -799,8 +799,12 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(body.waitForExistence(timeout:2))
         body.tap()
         // Return must insert a newline (not end editing) - a TextField(axis: .vertical) could not do this.
-        body.typeText("\n1行目\n2行目")
-        XCTAssertEqual(body.value as? String,"10 kΩへ変更して波形を再測定\n1行目\n2行目")
+        // Not asserting exact placement relative to the pre-existing text: where a plain tap lands the cursor
+        // in a multi-line field is layout/device-sensitive, and is not what this is testing.
+        body.typeText("1行目\n2行目")
+        let value = body.value as? String ?? ""
+        XCTAssertTrue(value.contains("1行目\n2行目"),"the newline must be preserved as typed, not end editing: \(value)")
+        XCTAssertTrue(value.contains("10 kΩへ変更して波形を再測定"),"the original content must still be there: \(value)")
     }
 
     @MainActor
