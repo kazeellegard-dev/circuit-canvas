@@ -36,6 +36,12 @@ private enum EditDeleteTarget: Identifiable {
     case symbol(UUID), note(UUID), text(UUID)
     var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)"; case .text(let id): "text-\(id)" } }
 }
+/// Which inspector text field (5D) is being edited live, on the canvas, with every other element dimmed and
+/// unreachable. Only text-entry fields (name/title/body) - the picker fields (種別・アイコン) are unaffected,
+/// per this task's own scope.
+private enum LiveEditTarget: Equatable {
+    case symbolTitle(UUID), noteTitle(UUID), noteBody(UUID), textBody(UUID)
+}
 private enum NoteType: String, CaseIterable, Identifiable {
     case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
     var id: Self { self }
@@ -135,6 +141,9 @@ struct ContentView: View {
     private var isEditDragActive: Bool {
         !dragOrigins.isEmpty || !noteDragOrigins.isEmpty || !textDragOrigins.isEmpty || resizeDrag != nil || noteResizeDrag != nil || segmentDrag != nil
     }
+    /// Edit mode has its own exclusive UI; live-editing a field on the canvas (5D) does too - every other
+    /// toolbar action and library tile is unreachable during either.
+    private var toolbarDisabled: Bool { editMode || liveEdit != nil }
     /// Which of the two mutually-exclusive ways of panning (5B: pan-tool one-finger drag, or a two-finger
     /// drag anywhere) currently owns canvasOffset/canvasPanOrigin. Only one may update them at a time -
     /// without this, both ending independently (each setting canvasPanOrigin = canvasOffset) while the other
@@ -158,6 +167,7 @@ struct ContentView: View {
     @State private var canvasDescription = ""
     @State private var editMode = false
     @State private var pendingDelete: EditDeleteTarget?
+    @State private var liveEdit: LiveEditTarget?
     @State private var undoStack: [CanvasSnapshot] = []
     @State private var redoStack: [CanvasSnapshot] = []
     @State private var undoRedoUnavailableReason: String?
@@ -219,15 +229,15 @@ struct ContentView: View {
                     .disabled(redoStack.isEmpty)
                     .accessibilityIdentifier("redo-button")
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                     Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                     // Jumps the library to whichever category the selected symbol is in, so it is visible
                     // (and its highlight legible) instead of leaving whatever tab happened to be open before.
                     Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol; selectedCategory = selectedLibrary.category }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                     Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                     // A dedicated pan tool (2026-09-29 feedback): one-finger drag on empty canvas otherwise
                     // does nothing (see canvasPanGesture) - too easy to nudge the canvas by accident while
                     // trying to grab a wire lead. Two fingers can always pan regardless of tool (below).
@@ -235,7 +245,7 @@ struct ContentView: View {
                         tool = .pan; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(tool == .pan ? .accentColor : nil)
-                    .disabled(editMode)
+                    .disabled(toolbarDisabled)
                     .accessibilityIdentifier("pan-mode-toggle")
                     // The edit-mode toggle sits just left of "確認", per feedback on the toolbar's reading
                     // order; its icon was changed from a trash can (which read oddly alongside the other
@@ -251,9 +261,9 @@ struct ContentView: View {
                     .tint(editMode ? .red : nil)
                     .accessibilityIdentifier("edit-mode-toggle")
                     Button("確認", systemImage: "slider.horizontal.3") { inspectorSessionPushed = false; showInspector = true }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                     Button("設定", systemImage: "gearshape") { showSettings = true }
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                 }
             }
             .sheet(isPresented: $showInspector) { NavigationStack { inspector.navigationTitle("インスペクタ") } }
@@ -345,7 +355,7 @@ struct ContentView: View {
                             .contentShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                         .accessibilityLabel("テキストを配置")
                         .accessibilityIdentifier("library-テキスト")
                     }
@@ -368,7 +378,7 @@ struct ContentView: View {
                             .contentShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
-                        .disabled(editMode)
+                        .disabled(toolbarDisabled)
                         .accessibilityLabel("\(kind.rawValue)を配置")
                         .accessibilityIdentifier("library-\(kind.rawValue)")
                     }
@@ -422,12 +432,25 @@ struct ContentView: View {
                         canvasPanOrigin = canvasOffset
                         activePanSource = nil
                     },
-                    isEditDragActive: { isEditDragActive || activePanSource == .singleFinger },
+                    isEditDragActive: { isEditDragActive || activePanSource == .singleFinger || liveEdit != nil },
                     onAttached: { twoFingerPanAttached = true }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
+                // Live-editing (5D) lives in viewport space, not canvas space: the edited item can sit
+                // anywhere on the (much larger, pannable/zoomable) canvas, including right at its edge, and
+                // a card centered exactly on its canvas position could then land partly off-screen - clamped
+                // here to always stay fully reachable and tappable regardless of where the item is.
+                if let target = liveEdit, let binding = liveEditBinding(for: target), let canvasPosition = liveEditPosition(for: target) {
+                    Rectangle().fill(Color.black.opacity(0.45))
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .contentShape(Rectangle())
+                        .onTapGesture {}
+                        .accessibilityIdentifier("live-edit-scrim")
+                    liveEditCard(text: binding, multiline: liveEditIsMultiline(target))
+                        .position(liveEditViewportPosition(for: target, canvasPosition: canvasPosition, viewportSize: proxy.size))
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .coordinateSpace(name: "editorViewport")
@@ -504,7 +527,7 @@ struct ContentView: View {
                 .padding(8)
                 .background(.thinMaterial, in: Capsule())
         }
-        .disabled(editMode)
+        .disabled(toolbarDisabled)
         .accessibilityIdentifier("zoom-menu")
     }
 
@@ -578,25 +601,25 @@ struct ContentView: View {
                         selected: selectedSymbol == symbol.id,
                         wireStartPinIndex: pendingWirePinIndex(for: symbol),
                         select: {
-                            guard tool == .select, !editMode else { return }
+                            guard tool == .select, !editMode, liveEdit == nil else { return }
                             selectedSymbol = symbol.id
                             selectedNote = nil; selectedText = nil
                         },
                         selectPin: { index in
-                            guard tool == .wire, !editMode else { return }
+                            guard tool == .wire, !editMode, liveEdit == nil else { return }
                             selectWirePin(pins(for: symbol)[index])
                         }
                     )
                         .position(symbol.position)
                         .onTapGesture {
-                            guard tool == .select, !editMode else { return }
+                            guard tool == .select, !editMode, liveEdit == nil else { return }
                             selectedSymbol = symbol.id
                             selectedNote = nil; selectedText = nil
                         }
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode else { return }
+                                    guard !editMode, liveEdit == nil else { return }
                                     move(symbolID: symbol.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
                                 }
                                 .onEnded { _ in dragOrigins[symbol.id] = nil }
@@ -683,7 +706,7 @@ struct ContentView: View {
                         note: $note,
                         selected: selectedNote == note.id,
                         select: {
-                            guard tool == .select, !editMode else { return }
+                            guard tool == .select, !editMode, liveEdit == nil else { return }
                             selectedNote = note.id
                             selectedSymbol = nil; selectedText = nil
                         }
@@ -692,7 +715,7 @@ struct ContentView: View {
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode else { return }
+                                    guard !editMode, liveEdit == nil else { return }
                                     move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
                                 }
                                 .onEnded { _ in noteDragOrigins[note.id] = nil }
@@ -792,7 +815,7 @@ struct ContentView: View {
                         editMode: editMode,
                         scale: canvasScale,
                         select: {
-                            guard tool == .select, !editMode else { return }
+                            guard tool == .select, !editMode, liveEdit == nil else { return }
                             selectedText = text.id
                             selectedSymbol = nil; selectedNote = nil
                         },
@@ -802,7 +825,7 @@ struct ContentView: View {
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode else { return }
+                                    guard !editMode, liveEdit == nil else { return }
                                     move(textID: text.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
                                 }
                                 .onEnded { _ in textDragOrigins[text.id] = nil }
@@ -811,9 +834,33 @@ struct ContentView: View {
 
             }
     }
+    private func liveEditCard(text: Binding<String>, multiline: Bool) -> some View {
+        VStack(spacing: 8) {
+            if multiline {
+                TextEditor(text: text)
+                    .frame(width: 260, height: 140)
+                    .padding(4)
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("live-edit-field")
+            } else {
+                TextField("", text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                    .accessibilityIdentifier("live-edit-field")
+                    .onSubmit { commitLiveEdit() }
+            }
+            Button("完了") { commitLiveEdit() }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("live-edit-done")
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2))
+    }
 
     private var canvasTapGesture: some Gesture {
         SpatialTapGesture(coordinateSpace: .named("editorViewport")).onEnded { tap in
+                guard liveEdit == nil else { return }
                 let point = canvasPoint(from: tap.location)
                 if let pending = pendingRelateFrom { setAnchor(pending.id, point, corner: pending.corner); pendingRelateFrom = nil }
                 // A background tap while waiting for the corner pick cancels relate mode explicitly, rather
@@ -835,8 +882,13 @@ struct ContentView: View {
         Form {
             if let id = selectedSymbol, let symbol = symbolBinding(for: id) {
                 Section("シンボル") {
-                    Text(symbol.wrappedValue.title)
-                    TextField("名称", text: symbol.title)
+                    // Tapping this, rather than editing inline, closes the sheet and edits it live on the
+                    // canvas instead (5D) - so the rename can be checked against the diagram's actual look
+                    // while typing, not only after returning here.
+                    Button { beginLiveEdit(.symbolTitle(id)) } label: {
+                        LabeledContent("名称") { Text(symbol.wrappedValue.title) }
+                    }
+                    .accessibilityIdentifier("inspector-symbol-title")
                     LabeledContent("接続", value: isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
                         .accessibilityIdentifier("symbol-connection-status")
                         .accessibilityValue(isConnected(symbol.wrappedValue) ? "接続あり" : "未接続")
@@ -870,13 +922,20 @@ struct ContentView: View {
                         LabeledContent("アイコン") { Image(systemName: note.wrappedValue.icon) }
                     }
                     .accessibilityIdentifier("inspector-note-icon-picker")
-                    TextField("タイトル", text: note.title)
-                    // TextEditor, not TextField(axis: .vertical): the latter treats Return as "done editing"
-                    // rather than a newline, so multi-line/箇条書き content could not actually be typed
-                    // (feedback, 2026-09-29).
-                    TextEditor(text: note.body)
-                        .frame(minHeight: 120)
-                        .accessibilityIdentifier("note-body-editor")
+                    // Both, like the symbol name above, are edited live on the canvas (5D) rather than
+                    // inline here - title and body alike can affect the note's on-canvas size/wrap, which is
+                    // exactly what this is meant to let the user watch while typing.
+                    Button { beginLiveEdit(.noteTitle(id)) } label: {
+                        LabeledContent("タイトル") { Text(note.wrappedValue.title) }
+                    }
+                    .accessibilityIdentifier("inspector-note-title")
+                    Button { beginLiveEdit(.noteBody(id)) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("本文")
+                            Text(note.wrappedValue.body).foregroundStyle(.secondary).lineLimit(3)
+                        }
+                    }
+                    .accessibilityIdentifier("note-body-editor")
                     Toggle("完了", isOn: note.complete)
                     Button("付箋を削除", role: .destructive) {
                         removeNote(id)
@@ -884,10 +943,13 @@ struct ContentView: View {
                 }
             } else if let id = selectedText, let text = textBinding(for: id) {
                 Section("テキスト") {
-                    // No title/type/icon, unlike a note (5C's own scope) - just the content itself.
-                    TextEditor(text: text.body)
-                        .frame(minHeight: 120)
-                        .accessibilityIdentifier("text-body-editor")
+                    // No title/type/icon, unlike a note (5C's own scope) - just the content itself, edited
+                    // live on the canvas (5D) like a note's title/body.
+                    Button { beginLiveEdit(.textBody(id)) } label: {
+                        Text(text.wrappedValue.body).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .accessibilityIdentifier("text-body-editor")
                     Button("テキストを削除", role: .destructive) {
                         removeText(id)
                     }
@@ -909,6 +971,55 @@ struct ContentView: View {
         guard let i = notes.firstIndex(where: { $0.id == id }) else { return }
         pushUndo()
         notes[i].anchor = point; notes[i].relateCorner = corner
+    }
+    // MARK: Live editing on the canvas (5D)
+    /// Leaves inspectorSessionPushed untouched: the live-edit round trip (dismiss the sheet, type, come back)
+    /// must not itself start or end an Undo batch - that is still governed purely by whichever discrete
+    /// action last touched inspectorSessionPushed (a picker change, "確認" opening the sheet, etc.), exactly
+    /// as before this feature existed.
+    private func beginLiveEdit(_ target: LiveEditTarget) {
+        liveEdit = target
+        showInspector = false
+    }
+    private func commitLiveEdit() {
+        liveEdit = nil
+        showInspector = true
+    }
+    /// The exact same bindings the inspector itself used to bind its now-removed TextField/TextEditor to -
+    /// reusing them (rather than a separate scratch buffer copied back on commit) is what makes the canvas's
+    /// own card update character-by-character as the user types, not just on commit.
+    private func liveEditBinding(for target: LiveEditTarget) -> Binding<String>? {
+        switch target {
+        case .symbolTitle(let id): symbolBinding(for: id)?.title
+        case .noteTitle(let id): noteBinding(for: id)?.title
+        case .noteBody(let id): noteBinding(for: id)?.body
+        case .textBody(let id): textBinding(for: id)?.body
+        }
+    }
+    private func liveEditPosition(for target: LiveEditTarget) -> CGPoint? {
+        switch target {
+        case .symbolTitle(let id): symbols.first(where: { $0.id == id })?.position
+        case .noteTitle(let id), .noteBody(let id): notes.first(where: { $0.id == id })?.position
+        case .textBody(let id): texts.first(where: { $0.id == id })?.position
+        }
+    }
+    private func liveEditIsMultiline(_ target: LiveEditTarget) -> Bool {
+        switch target { case .noteBody, .textBody: true; case .symbolTitle, .noteTitle: false }
+    }
+    /// The card's approximate footprint (see liveEditCard) - only needed to keep it fully inside the
+    /// viewport; does not need to track the card's real layout exactly, just closely enough that nothing
+    /// gets clipped or pushed out of reach.
+    private func liveEditCardSize(_ target: LiveEditTarget) -> CGSize {
+        liveEditIsMultiline(target) ? CGSize(width: 284, height: 220) : CGSize(width: 244, height: 110)
+    }
+    private func liveEditViewportPosition(for target: LiveEditTarget, canvasPosition: CGPoint, viewportSize: CGSize) -> CGPoint {
+        let screenPoint = CGPoint(x: canvasPosition.x * canvasScale + canvasOffset.width, y: canvasPosition.y * canvasScale + canvasOffset.height)
+        let size = liveEditCardSize(target)
+        let margin: CGFloat = 8
+        let halfW = size.width / 2, halfH = size.height / 2
+        let x = min(max(screenPoint.x, halfW + margin), max(halfW + margin, viewportSize.width - halfW - margin))
+        let y = min(max(screenPoint.y, halfH + margin), max(halfH + margin, viewportSize.height - halfH - margin))
+        return CGPoint(x: x, y: y)
     }
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
@@ -1112,6 +1223,10 @@ struct ContentView: View {
     private func canvasPanGesture(in viewportSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
             .onChanged { value in
+                // Nothing on the canvas responds to a touch while a field is being live-edited (5D) - the
+                // scrim above it already blocks most of these, but a touch that starts outside canvasSize
+                // (in the "outside the canvas" margin) reaches this gesture directly, without the scrim.
+                guard liveEdit == nil else { return }
                 // Very short transparent targets can deliver the touch to this
                 // background. Resolve once at touch-down and retain that choice.
                 if segmentDrag == nil && !isPanningCanvas {
@@ -1137,7 +1252,7 @@ struct ContentView: View {
     }
     private var canvasZoomGesture: some Gesture {
         MagnificationGesture()
-            .onChanged { value in canvasScale = min(max(canvasScaleOrigin * value, 0.5), 2.5) }
+            .onChanged { value in guard liveEdit == nil else { return }; canvasScale = min(max(canvasScaleOrigin * value, 0.5), 2.5) }
             .onEnded { _ in canvasScaleOrigin = canvasScale }
     }
     private func canvasPoint(from point: CGPoint) -> CGPoint { .init(x: (point.x - canvasOffset.width) / canvasScale, y: (point.y - canvasOffset.height) / canvasScale) }

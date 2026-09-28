@@ -115,12 +115,9 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertLessThanOrEqual(body.frame.maxY,note.frame.maxY,"the body text must not be clipped at the minimum size")
         XCTAssertGreaterThanOrEqual(body.frame.minY,note.frame.minY)
         // Longer content, still at the minimum size: title wraps to two lines and the body is still inside.
-        let field = app.textFields["タイトル"]
         note.tap(); app.buttons["確認"].tap()
-        field.tap(); field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + "とても長いタイトルを二行に折り返して確認する")
-        let bodyField = app.textViews["note-body-editor"]
-        bodyField.tap()
-        bodyField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:40) + "本文も長くして、最小サイズでどこまで読めるかを確認するための、長い説明文にする。")
+        liveEdit(app,trigger:"inspector-note-title",multiline:false,clear:20,type:"とても長いタイトルを二行に折り返して確認する")
+        liveEdit(app,trigger:"note-body-editor",multiline:true,clear:40,type:"本文も長くして、最小サイズでどこまで読めるかを確認するための、長い説明文にする。")
         app.navigationBars["インスペクタ"].swipeDown()
         let longTitle = element(app,"experiment-note-とても長いタイトルを二行に折り返して確認する")
         XCTAssertTrue(longTitle.waitForExistence(timeout:2))
@@ -589,15 +586,11 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertNotEqual(grownSize,[90,30],"the drag must actually have grown it")
 
         app.buttons["確認"].tap()
-        let nameField = app.textFields["名称"]
-        XCTAssertTrue(nameField.waitForExistence(timeout:2))
-        nameField.tap()
-        nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + "A")
+        liveEdit(app,trigger:"inspector-symbol-title",multiline:false,clear:20,type:"A")
         // An independent confirm action (here, resetting the size) in between two renames.
         XCTAssertTrue(app.buttons["inspector-reset-size"].waitForExistence(timeout:2))
         app.buttons["inspector-reset-size"].tap()
-        nameField.tap()
-        nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:5) + "B")
+        liveEdit(app,trigger:"inspector-symbol-title",multiline:false,clear:5,type:"B")
         app.navigationBars["インスペクタ"].swipeDown()
         XCTAssertTrue(element(app,"symbol-B").waitForExistence(timeout:2))
         XCTAssertEqual(size("B"),[90,30],"reset-size must have taken effect")
@@ -795,9 +788,13 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
         app.buttons["確認"].tap()
-        let body = app.textViews["note-body-editor"]
+        app.buttons["note-body-editor"].tap()
+        let body = app.textViews["live-edit-field"]
         XCTAssertTrue(body.waitForExistence(timeout:2))
-        body.tap()
+        // A single tap on this floating (position-placed) TextEditor does not reliably grant it keyboard
+        // focus in this harness - a second tap does (5D; same underlying quirk noted elsewhere in this file
+        // for TextEditor taps).
+        body.tap(); body.tap()
         // Return must insert a newline (not end editing) - a TextField(axis: .vertical) could not do this.
         // Not asserting exact placement relative to the pre-existing text: where a plain tap lands the cursor
         // in a multi-line field is layout/device-sensitive, and is not what this is testing.
@@ -805,12 +802,15 @@ final class CircuitCanvasUITests: XCTestCase {
         let value = body.value as? String ?? ""
         XCTAssertTrue(value.contains("1行目\n2行目"),"the newline must be preserved as typed, not end editing: \(value)")
         XCTAssertTrue(value.contains("10 kΩへ変更して波形を再測定"),"the original content must still be there: \(value)")
+        app.buttons["live-edit-done"].tap()
 
-        // The typed newline must actually be saved to the model, not just shown live in the field.
+        // The typed newline must actually be saved to the model, not just shown live in the field - reopening
+        // live-edit for the same body must show it again, and it must also have survived a full sheet close.
         app.navigationBars["インスペクタ"].swipeDown()
         note.tap()
         app.buttons["確認"].tap()
-        let reopened = (app.textViews["note-body-editor"].value as? String ?? "")
+        app.buttons["note-body-editor"].tap()
+        let reopened = (app.textViews["live-edit-field"].value as? String ?? "")
         XCTAssertTrue(reopened.contains("1行目\n2行目"),"the newline must have been saved: \(reopened)")
     }
 
@@ -897,16 +897,22 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(moved[0] - origin[0], 50, accuracy: 3)
         XCTAssertEqual(moved[1] - origin[1], -40, accuracy: 3)
 
-        // Editing its content via the inspector, like a note's body.
+        // Editing its content live on the canvas (5D), triggered from the inspector like a note's body.
         text.tap()
         app.buttons["確認"].tap()
         XCTAssertTrue(app.staticTexts["テキスト"].waitForExistence(timeout:2))
-        let editor = app.textViews["text-body-editor"]
+        app.buttons["text-body-editor"].tap()
+        let editor = app.textViews["live-edit-field"]
         XCTAssertTrue(editor.waitForExistence(timeout:2))
-        editor.tap()
+        editor.tap(); editor.tap()
+        // Not asserting where in "テキスト" this lands (append/prepend/middle) - a plain tap's cursor position
+        // in a multi-line field is layout/device-sensitive (same caveat as the note body tests elsewhere in
+        // this file). A CONTAINS match on the card's own identifier (built from its body) sidesteps that.
         editor.typeText(" 編集済み")
+        app.buttons["live-edit-done"].tap()
         app.navigationBars["インスペクタ"].swipeDown()
-        XCTAssertTrue(element(app,"text-テキスト 編集済み").waitForExistence(timeout:2))
+        let edited = app.descendants(matching: .any).matching(NSPredicate(format:"identifier CONTAINS %@","編集済み")).firstMatch
+        XCTAssertTrue(edited.waitForExistence(timeout:2))
     }
 
     @MainActor
@@ -974,9 +980,83 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app,"text-テキスト").exists,"undo must restore the deleted text item")
     }
 
+    // MARK: - Live editing on the canvas (5D)
+
+    @MainActor
+    func testLiveEditingASymbolNameClosesInspectorBlocksOtherElementsUpdatesLiveAndReturnsOnDone() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:3))
+        element(app,"symbol-Main MCU").tap()
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.buttons["inspector-symbol-title"].waitForExistence(timeout:2))
+        app.buttons["inspector-symbol-title"].tap()
+        XCTAssertFalse(app.navigationBars["インスペクタ"].exists,"tapping the name must close the inspector sheet")
+        let field = app.textFields["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+        XCTAssertTrue(element(app,"live-edit-scrim").exists)
+
+        // Other elements are dimmed and unreachable while live-editing (the scrim sits above them and
+        // absorbs the touch, even though the covered element is still in the accessibility tree).
+        XCTAssertFalse(app.buttons["＋シンボル"].isEnabled)
+        element(app,"symbol-CAN").tap()
+        XCTAssertTrue(field.exists,"a tap on a dimmed symbol must not have done anything, e.g. selected it and dismissed this field")
+
+        // Typing reflects immediately on the canvas's own card - it is the same binding, not a scratch copy
+        // only written back on commit.
+        field.tap()
+        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + "Renamed MCU")
+        XCTAssertTrue(element(app,"symbol-Renamed MCU").waitForExistence(timeout:2),"the canvas card itself must update live, not only after committing")
+
+        // Confirming returns to the inspector.
+        app.buttons["live-edit-done"].tap()
+        XCTAssertTrue(app.navigationBars["インスペクタ"].waitForExistence(timeout:2))
+        XCTAssertTrue(app.staticTexts["Renamed MCU"].exists)
+    }
+
+    @MainActor
+    func testLiveEditingANoteBodyBlocksDraggingItAndSavesOnDone() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        app.buttons["確認"].tap()
+        app.buttons["note-body-editor"].tap()
+        let field = app.textViews["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+
+        // A drag over the (now dimmed, underlying) note must not move it while its body is being edited.
+        let before = note.value as? String
+        let start = note.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: 60, dy: 60)))
+        XCTAssertEqual(note.value as? String, before, "the note must not move while its body is being live-edited")
+
+        field.tap(); field.tap()
+        field.typeText(" 追記")
+        app.buttons["live-edit-done"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertTrue(element(app,"experiment-note-R12を変更").waitForExistence(timeout:2))
+    }
+
     @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// Drives the 5D live-edit round trip: tap an inspector row (dismissing the sheet), type into the
+    /// canvas-side field it opens, then confirm (back to the inspector). `clear` backspaces that many
+    /// characters of the field's existing content first, mirroring the old direct-TextField tests' own
+    /// delete-then-retype pattern.
+    @MainActor
+    private func liveEdit(_ app: XCUIApplication, trigger: String, multiline: Bool, clear: Int = 0, type: String) {
+        app.buttons[trigger].tap()
+        let field = multiline ? app.textViews["live-edit-field"] : app.textFields["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2),"live-edit-field did not appear for \(trigger)")
+        // A single tap on this floating (position-placed) TextEditor does not reliably grant it keyboard
+        // focus in this harness - a second tap does; harmless for the single-line TextField case too.
+        field.tap(); field.tap()
+        if clear > 0 { field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:clear)) }
+        field.typeText(type)
+        app.buttons["live-edit-done"].tap()
     }
 
     @MainActor
@@ -1732,9 +1812,7 @@ final class CircuitCanvasUITests: XCTestCase {
         place(app,category:"ブロック",name:"汎用ブロック",x:400,y:550)
         element(app,"symbol-汎用ブロック").tap()
         app.buttons["確認"].tap()
-        let field = app.textFields["名称"]
-        field.tap()
-        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:10) + "電源ユニット")
+        liveEdit(app,trigger:"inspector-symbol-title",multiline:false,clear:10,type:"電源ユニット")
         XCTAssertTrue(app.buttons["inspector-icon-picker"].waitForExistence(timeout:2))
         app.buttons["inspector-icon-picker"].tap()
         XCTAssertTrue(app.staticTexts["アイコンを選択"].waitForExistence(timeout:2))
@@ -1785,9 +1863,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertFalse((element(app,"canvas-junctions").value as? String ?? "").isEmpty)
         element(app,"symbol-GND").tap(); app.buttons["確認"].tap()
         XCTAssertEqual(element(app,"symbol-connection-status").value as? String,"接続あり", app.debugDescription)
-        let field = app.textFields["名称"]
-        field.tap()
-        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:3) + "接地")
+        liveEdit(app,trigger:"inspector-symbol-title",multiline:false,clear:3,type:"接地")
         XCTAssertTrue(element(app,"symbol-接地").exists)
         app.buttons["シンボルを削除"].tap()
         XCTAssertFalse(element(app,"symbol-接地").exists)
