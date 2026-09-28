@@ -805,6 +805,13 @@ final class CircuitCanvasUITests: XCTestCase {
         let value = body.value as? String ?? ""
         XCTAssertTrue(value.contains("1行目\n2行目"),"the newline must be preserved as typed, not end editing: \(value)")
         XCTAssertTrue(value.contains("10 kΩへ変更して波形を再測定"),"the original content must still be there: \(value)")
+
+        // The typed newline must actually be saved to the model, not just shown live in the field.
+        app.navigationBars["インスペクタ"].swipeDown()
+        note.tap()
+        app.buttons["確認"].tap()
+        let reopened = (app.textViews["note-body-editor"].value as? String ?? "")
+        XCTAssertTrue(reopened.contains("1行目\n2行目"),"the newline must have been saved: \(reopened)")
     }
 
     @MainActor
