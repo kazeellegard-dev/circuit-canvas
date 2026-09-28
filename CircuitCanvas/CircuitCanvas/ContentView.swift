@@ -30,11 +30,11 @@ private enum NoteSize {
         ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
     }
 }
-private enum Tool { case select, symbol, note, wire, pan }
+private enum Tool { case select, symbol, note, text, wire, pan }
 /// What the ✗ badge (edit mode, 4C) is about to delete, pending its confirmation alert.
 private enum EditDeleteTarget: Identifiable {
-    case symbol(UUID), note(UUID)
-    var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)" } }
+    case symbol(UUID), note(UUID), text(UUID)
+    var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)"; case .text(let id): "text-\(id)" } }
 }
 private enum NoteType: String, CaseIterable, Identifiable {
     case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
@@ -94,11 +94,17 @@ private struct NoteItem: Identifiable {
         self.icon = icon ?? type.icon
     }
 }
+/// A plain text label (5C): unlike a note, it has no type/icon/anchor/resize - just content and a position.
+/// No pins, so it can never be wired.
+private struct TextItem: Identifiable {
+    let id = UUID(); var body: String; var position: CGPoint
+    init(body: String = "テキスト", position: CGPoint) { self.body = body; self.position = position }
+}
 private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 /// One Undo/Redo step (4D): the whole diagram's content, from just before one meaningful operation. Simpler
 /// and safer than hooking every mutation individually into SwiftUI's UndoManager, at the cost of copying
 /// three arrays per step - trivial at this diagram's scale, and capped (maxUndoSteps) regardless.
-private struct CanvasSnapshot { var symbols: [SymbolItem]; var notes: [NoteItem]; var wires: [WireItem] }
+private struct CanvasSnapshot { var symbols: [SymbolItem]; var notes: [NoteItem]; var texts: [TextItem]; var wires: [WireItem] }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -107,11 +113,13 @@ struct ContentView: View {
     @State private var selectedCategory: SymbolCategory = .block
     @State private var selectedSymbol: UUID?
     @State private var selectedNote: UUID?
+    @State private var selectedText: UUID?
     @State private var linkingNote: UUID?   // relate button pressed: waiting for a corner tap on this note
     @State private var pendingRelateFrom: (id: UUID, corner: NoteCorner)?   // corner tapped: waiting for the target tap
     @State private var pendingWireStart: CGPoint?
     @State private var dragOrigins: [UUID: CGPoint] = [:]
     @State private var noteDragOrigins: [UUID: CGPoint] = [:]
+    @State private var textDragOrigins: [UUID: CGPoint] = [:]
     private struct SegmentDrag {
         let wireID: UUID
         let segment: Int
@@ -125,7 +133,7 @@ struct ContentView: View {
     /// tracking a touch. Gates the two-finger pan overlay: a second finger joining an in-progress edit drag
     /// must not also start panning the canvas underneath it (Codex major, 5B round 2).
     private var isEditDragActive: Bool {
-        !dragOrigins.isEmpty || !noteDragOrigins.isEmpty || resizeDrag != nil || noteResizeDrag != nil || segmentDrag != nil
+        !dragOrigins.isEmpty || !noteDragOrigins.isEmpty || !textDragOrigins.isEmpty || resizeDrag != nil || noteResizeDrag != nil || segmentDrag != nil
     }
     /// Which of the two mutually-exclusive ways of panning (5B: pan-tool one-finger drag, or a two-finger
     /// drag anywhere) currently owns canvasOffset/canvasPanOrigin. Only one may update them at a time -
@@ -166,6 +174,7 @@ struct ContentView: View {
         .init(title: "Temperature", kind: .block, position: .init(x: 120, y: 390), icon: "sensor.tag.radiowaves.forward")
     ]
     @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
+    @State private var texts: [TextItem] = []
     @State private var wires: [WireItem] = [
         .init(start: .init(x: 165, y: 160), end: .init(x: 325, y: 250)),
         .init(start: .init(x: 415, y: 250), end: .init(x: 575, y: 250)),
@@ -211,7 +220,7 @@ struct ContentView: View {
                     .accessibilityIdentifier("redo-button")
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(editMode)
-                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil }
+                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(editMode)
                     // Jumps the library to whichever category the selected symbol is in, so it is visible
                     // (and its highlight legible) instead of leaving whatever tab happened to be open before.
@@ -223,7 +232,7 @@ struct ContentView: View {
                     // does nothing (see canvasPanGesture) - too easy to nudge the canvas by accident while
                     // trying to grab a wire lead. Two fingers can always pan regardless of tool (below).
                     Button(tool == .pan ? "キャンバス移動中" : "キャンバス移動", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
-                        tool = .pan; selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+                        tool = .pan; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(tool == .pan ? .accentColor : nil)
                     .disabled(editMode)
@@ -236,7 +245,7 @@ struct ContentView: View {
                         // Edit mode has its own, exclusive UI (the ✗ badges); leave no other mode's state
                         // dangling underneath it, in either direction.
                         tool = .select
-                        selectedSymbol = nil; selectedNote = nil
+                        selectedSymbol = nil; selectedNote = nil; selectedText = nil
                         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(editMode ? .red : nil)
@@ -255,6 +264,7 @@ struct ContentView: View {
                     switch pendingDelete {
                     case .symbol(let id): removeSymbol(id)
                     case .note(let id): removeNote(id)
+                    case .text(let id): removeText(id)
                     case .none: break
                     }
                     pendingDelete = nil
@@ -320,6 +330,25 @@ struct ContentView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    // "テキスト" is not a SymbolKind - it is its own tool (5C), so this tab shows one
+                    // placeable tile instead of the usual kind grid.
+                    if selectedCategory == .text {
+                        Button { tool = .text } label: {
+                            VStack(spacing: 5) {
+                                Image(systemName: "textformat").font(.title3).frame(height: 32)
+                                Text("テキスト").font(.caption2).lineLimit(1).minimumScaleFactor(0.7)
+                            }
+                            .frame(width: 92, height: 72)
+                            .foregroundStyle(tool == .text ? Color.accentColor : Color.primary)
+                            .background(tool == .text ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(tool == .text ? Color.accentColor : Color.clear, lineWidth: 2))
+                            .contentShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(editMode)
+                        .accessibilityLabel("テキストを配置")
+                        .accessibilityIdentifier("library-テキスト")
+                    }
                     ForEach(SymbolKind.allCases.filter { $0.category == selectedCategory }) { kind in
                         Button { selectedLibrary = kind; tool = .symbol } label: {
                             VStack(spacing: 5) {
@@ -418,6 +447,7 @@ struct ContentView: View {
                     else if pendingRelateFrom != nil { hint("arrowshape.turn.up.right", "関連付けたい位置をタップ") }
                     else if tool == .note { hint("note.text.badge.plus", "キャンバスをタップして付箋を配置") }
                     else if tool == .symbol { hint("plus.square.on.square", "\(selectedLibrary.rawValue)を配置") }
+                    else if tool == .text { hint("textformat", "キャンバスをタップしてテキストを配置") }
                     else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
                     else if tool == .pan { hint("arrow.up.and.down.and.arrow.left.and.right", "ドラッグしてキャンバスを移動") }
                 }.padding(16).allowsHitTesting(false)
@@ -550,7 +580,7 @@ struct ContentView: View {
                         select: {
                             guard tool == .select, !editMode else { return }
                             selectedSymbol = symbol.id
-                            selectedNote = nil
+                            selectedNote = nil; selectedText = nil
                         },
                         selectPin: { index in
                             guard tool == .wire, !editMode else { return }
@@ -561,7 +591,7 @@ struct ContentView: View {
                         .onTapGesture {
                             guard tool == .select, !editMode else { return }
                             selectedSymbol = symbol.id
-                            selectedNote = nil
+                            selectedNote = nil; selectedText = nil
                         }
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
@@ -655,7 +685,7 @@ struct ContentView: View {
                         select: {
                             guard tool == .select, !editMode else { return }
                             selectedNote = note.id
-                            selectedSymbol = nil
+                            selectedSymbol = nil; selectedText = nil
                         }
                     )
                         .position(note.position)
@@ -673,7 +703,7 @@ struct ContentView: View {
                             // right alongside the ✗ badges (Codex minor, 4C round 1).
                             if !editMode {
                                 Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }
-                                Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; linkingNote = note.id }
+                                Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; selectedText = nil; linkingNote = note.id }
                             }
                         }
                     if editMode {
@@ -755,6 +785,29 @@ struct ContentView: View {
                         .accessibilityIdentifier("experiment-note-\(note.title)-edit")
                     }
                 }
+                ForEach($texts) { $text in
+                    TextCard(
+                        text: $text,
+                        selected: selectedText == text.id,
+                        editMode: editMode,
+                        scale: canvasScale,
+                        select: {
+                            guard tool == .select, !editMode else { return }
+                            selectedText = text.id
+                            selectedSymbol = nil; selectedNote = nil
+                        },
+                        delete: { pendingDelete = .text(text.id) }
+                    )
+                        .position(text.position)
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                                .onChanged { value in
+                                    guard !editMode else { return }
+                                    move(textID: text.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                }
+                                .onEnded { _ in textDragOrigins[text.id] = nil }
+                        )
+                }
 
             }
     }
@@ -767,13 +820,14 @@ struct ContentView: View {
                 // than falling through to deselect and leaving linkingNote (and its hint) dangling (Codex
                 // minor, 4A round 1).
                 else if linkingNote != nil { linkingNote = nil }
-                else if editMode { selectedNote = nil; selectedSymbol = nil }
+                else if editMode { selectedNote = nil; selectedSymbol = nil; selectedText = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
                 else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
                 else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
-                else { selectedNote = nil; selectedSymbol = nil }
+                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; tool = .select }
+                else { selectedNote = nil; selectedSymbol = nil; selectedText = nil }
             }
     }
 
@@ -826,6 +880,16 @@ struct ContentView: View {
                     Toggle("完了", isOn: note.complete)
                     Button("付箋を削除", role: .destructive) {
                         removeNote(id)
+                    }
+                }
+            } else if let id = selectedText, let text = textBinding(for: id) {
+                Section("テキスト") {
+                    // No title/type/icon, unlike a note (5C's own scope) - just the content itself.
+                    TextEditor(text: text.body)
+                        .frame(minHeight: 120)
+                        .accessibilityIdentifier("text-body-editor")
+                    Button("テキストを削除", role: .destructive) {
+                        removeText(id)
                     }
                 }
             } else {
@@ -905,6 +969,17 @@ struct ContentView: View {
             }
         )
     }
+    private func textBinding(for id: UUID) -> Binding<TextItem>? {
+        guard let initial = texts.first(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: { texts.first(where: { $0.id == id }) ?? initial },
+            set: { updated in
+                guard let index = texts.firstIndex(where: { $0.id == id }) else { return }
+                if !inspectorSessionPushed { pushUndo(); inspectorSessionPushed = true }
+                texts[index] = updated
+            }
+        )
+    }
     private func rotateSymbol(_ id: UUID) {
         guard let i = symbols.firstIndex(where: { $0.id == id }), !symbols[i].kind.isBlock else { return }
         pushUndo()
@@ -975,12 +1050,18 @@ struct ContentView: View {
         if pendingRelateFrom?.id == id { pendingRelateFrom = nil }
         notes.removeAll { $0.id == id }
     }
+    private func removeText(_ id: UUID) {
+        guard texts.contains(where: { $0.id == id }) else { return }
+        pushUndo(); inspectorSessionPushed = false
+        selectedText = nil
+        texts.removeAll { $0.id == id }
+    }
     /// Settings' "キャンバスをリセット" (only reachable after its own confirmation dialog): clears the
     /// diagram back to blank, and any state that referred to what was on it.
     private func resetCanvas() {
         pushUndo()
-        symbols = []; notes = []; wires = []
-        selectedSymbol = nil; selectedNote = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+        symbols = []; notes = []; texts = []; wires = []
+        selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         tool = .select
         reroute()
         centerViewportOnCanvas()
@@ -1001,27 +1082,27 @@ struct ContentView: View {
     /// Call right before a meaningful, undoable change (see this task's list: add/move/resize/rotate/
     /// pin-add/delete/rename/type/icon). A drag pushes once, at its first onChanged, not on every delta.
     private func pushUndo() {
-        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
         if undoStack.count > maxUndoSteps { undoStack.removeFirst() }
         redoStack.removeAll()
     }
     private func performUndo() {
         guard let previous = undoStack.popLast() else { undoRedoUnavailableReason = "取り消す操作がありません"; return }
-        redoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        redoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
         restore(previous)
     }
     private func performRedo() {
         guard let next = redoStack.popLast() else { undoRedoUnavailableReason = "やり直す操作がありません"; return }
-        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, wires: wires))
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
         restore(next)
     }
     /// Snapshots already hold each wire's exact prior `.points`, so this does not reroute() - replanning
     /// could legitimately land on a different route than the one actually being restored.
     private func restore(_ snapshot: CanvasSnapshot) {
-        symbols = snapshot.symbols; notes = snapshot.notes; wires = snapshot.wires
-        selectedSymbol = nil; selectedNote = nil
+        symbols = snapshot.symbols; notes = snapshot.notes; texts = snapshot.texts; wires = snapshot.wires
+        selectedSymbol = nil; selectedNote = nil; selectedText = nil
         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
-        dragOrigins = [:]; noteDragOrigins = [:]; resizeDrag = nil; noteResizeDrag = nil; segmentDrag = nil
+        dragOrigins = [:]; noteDragOrigins = [:]; textDragOrigins = [:]; resizeDrag = nil; noteResizeDrag = nil; segmentDrag = nil
     }
     /// One-finger drag on empty canvas. Per feedback (2026-09-29): grabbing a wire lead too close to the
     /// background used to pan the canvas instead far too easily. One finger now only ever does two things -
@@ -1104,6 +1185,13 @@ struct ContentView: View {
         let origin = noteDragOrigins[noteID] ?? notes[index].position
         noteDragOrigins[noteID] = origin
         notes[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
+    }
+    private func move(textID: UUID, by translation: CGSize) {
+        guard activePanSource == nil, let index = texts.firstIndex(where: { $0.id == textID }) else { return }
+        if textDragOrigins[textID] == nil { pushUndo() }
+        let origin = textDragOrigins[textID] ?? texts[index].position
+        textDragOrigins[textID] = origin
+        texts[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
     private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation, size:symbol.size, blockPins:symbol.blockPins) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }
@@ -1400,6 +1488,47 @@ private struct NoteCard: View {
                 .accessibilityValue(note.icon)
                 .allowsHitTesting(false)
         }
+    }
+}
+
+/// A plain text label on the canvas (5C) - no title/type/icon/anchor/resize, unlike NoteCard; just its own
+/// content is both what it shows and (mirroring how SymbolCard/NoteCard use their own title) what its
+/// accessibility identifier is built from.
+private struct TextCard: View {
+    @Binding var text: TextItem
+    let selected: Bool
+    let editMode: Bool
+    let scale: CGFloat
+    let select: () -> Void
+    let delete: () -> Void
+    var body: some View {
+        Text(text.body)
+            .font(.body)
+            .padding(6)
+            .background(selected ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2))
+            .contentShape(Rectangle())
+            .onTapGesture(perform: select)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("text-\(text.body)")
+            .accessibilityValue("x=\(Int(text.position.x)), y=\(Int(text.position.y))")
+            .overlay(alignment: .topTrailing) {
+                if editMode {
+                    let side = ResizableGeometry.screenConstant(28, scale: scale)
+                    Button(action: delete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: side*0.75))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .red)
+                            .frame(width: side, height: side)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: side/2, y: -side/2)
+                    .accessibilityLabel("テキストを削除")
+                    .accessibilityIdentifier("text-\(text.body)-edit-delete")
+                }
+            }
     }
 }
 

@@ -3,6 +3,9 @@ import SwiftUI
 enum SymbolCategory: String, CaseIterable, Identifiable {
     case power = "電源", passive = "受動部品", semiconductor = "半導体", logic = "ロジック"
     case protection = "スイッチ・保護", load = "負荷・その他", relayConnector = "リレー・コネクタ", block = "ブロック"
+    // Not a SymbolKind category (no SymbolKind maps to it) - a separate library tab for placing a plain
+    // text item instead (5C, 2026-09-29 feedback: "テキストの追加...別タブでの実装").
+    case text = "テキスト"
     var id: Self { self }
 }
 

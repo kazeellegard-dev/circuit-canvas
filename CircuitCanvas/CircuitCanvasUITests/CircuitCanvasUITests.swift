@@ -870,6 +870,89 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["図面"].waitForExistence(timeout: 2))
     }
 
+    // MARK: - Text item (5C)
+
+    @MainActor
+    func testTextTabPlacesAPlainTextItemThatCanBeDraggedAndEditedInTheInspector() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+
+        app.buttons["library-category-テキスト"].tap()
+        XCTAssertTrue(app.buttons["library-テキスト"].waitForExistence(timeout:2))
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        let text = element(app,"text-テキスト")
+        XCTAssertTrue(text.waitForExistence(timeout:2),"a new text item defaults to the placeholder content テキスト")
+
+        // Selecting it, then dragging it, moves it (like a note/symbol) - no pins, so nothing about wiring
+        // applies to it.
+        let before = text.value as? String
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+        let start = text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: 50, dy: -40)))
+        let moved = position(text.value as? String), origin = position(before)
+        guard moved.count == 2, origin.count == 2 else { return XCTFail("cannot read the text position: \(String(describing: text.value)) / \(String(describing: before))") }
+        XCTAssertEqual(moved[0] - origin[0], 50, accuracy: 3)
+        XCTAssertEqual(moved[1] - origin[1], -40, accuracy: 3)
+
+        // Editing its content via the inspector, like a note's body.
+        text.tap()
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.staticTexts["テキスト"].waitForExistence(timeout:2))
+        let editor = app.textViews["text-body-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout:2))
+        editor.tap()
+        editor.typeText(" 編集済み")
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertTrue(element(app,"text-テキスト 編集済み").waitForExistence(timeout:2))
+    }
+
+    @MainActor
+    func testEditModeDeletesATextItemWithConfirmation() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        XCTAssertTrue(element(app,"text-テキスト").waitForExistence(timeout:2))
+
+        app.buttons["edit-mode-toggle"].tap()
+        let deleteText = element(app,"text-テキスト-edit-delete")
+        XCTAssertTrue(deleteText.waitForExistence(timeout:2))
+        deleteText.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["キャンセル"].tap()
+        XCTAssertTrue(element(app,"text-テキスト").exists,"cancelling must not delete")
+        deleteText.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["削除"].tap()
+        XCTAssertFalse(element(app,"text-テキスト").exists)
+    }
+
+    @MainActor
+    func testUndoRedoOnAddingAndDeletingATextItem() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        XCTAssertTrue(element(app,"text-テキスト").exists)
+        app.buttons["undo-button"].tap()
+        XCTAssertFalse(element(app,"text-テキスト").exists,"undo must remove the just-placed text item")
+        app.buttons["redo-button"].tap()
+        XCTAssertTrue(element(app,"text-テキスト").exists,"redo must bring it back")
+
+        element(app,"text-テキスト").tap()
+        app.buttons["確認"].tap()
+        app.buttons["テキストを削除"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        XCTAssertFalse(element(app,"text-テキスト").exists)
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"text-テキスト").exists,"undo must restore the deleted text item")
+    }
+
     @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
