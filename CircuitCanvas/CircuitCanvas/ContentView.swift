@@ -121,6 +121,12 @@ struct ContentView: View {
     @State private var resizeDrag: ResizeDrag?
     @State private var noteResizeDrag: ResizeDrag?
     @State private var segmentDrag: SegmentDrag?
+    /// True while any single-finger edit drag (symbol/note move, either resize, a wire segment) is already
+    /// tracking a touch. Gates the two-finger pan overlay: a second finger joining an in-progress edit drag
+    /// must not also start panning the canvas underneath it (Codex major, 5B round 2).
+    private var isEditDragActive: Bool {
+        !dragOrigins.isEmpty || !noteDragOrigins.isEmpty || resizeDrag != nil || noteResizeDrag != nil || segmentDrag != nil
+    }
     @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
@@ -369,6 +375,7 @@ struct ContentView: View {
                         )
                     },
                     onEnded: { canvasPanOrigin = canvasOffset },
+                    isEditDragActive: { isEditDragActive },
                     onAttached: { twoFingerPanAttached = true }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -1420,6 +1427,10 @@ private final class WindowAttachingView: UIView {
 private struct TwoFingerPanOverlay: UIViewRepresentable {
     let onChanged: (CGSize) -> Void
     let onEnded: () -> Void
+    /// Whether a single-finger edit drag (symbol/note move, either resize, a wire segment) is already
+    /// tracking a touch - checked fresh at gesture-start time, not just once. A second finger joining one of
+    /// those must not also start panning the canvas underneath it (Codex major, 5B round 2).
+    let isEditDragActive: () -> Bool
     /// Fires once the recognizer has actually been added to a window. XCUITest has no public API to
     /// synthesize a genuine two-finger pan (only tap and pinch have dedicated methods), so this is the one
     /// part of the wiring a UI test can still confirm: that attachment itself succeeded, not left silently
@@ -1436,20 +1447,27 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
         return view
     }
     func updateUIView(_ uiView: UIView, context: Context) {
+        // Refreshed on every update, not just captured once at makeCoordinator time: onChanged closes over
+        // this render's viewportSize (for boundedCanvasOffset), which can change (rotation, split view) -
+        // Codex minor, 5B round 2.
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+        context.coordinator.isEditDragActive = isEditDragActive
         if let scopeView = uiView.window != nil ? uiView : nil {
             context.coordinator.attachIfNeeded(scopeView: scopeView)
         }
     }
-    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded, onAttached: onAttached) }
+    func makeCoordinator() -> Coordinator { Coordinator(onChanged: onChanged, onEnded: onEnded, isEditDragActive: isEditDragActive, onAttached: onAttached) }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        let onChanged: (CGSize) -> Void
-        let onEnded: () -> Void
+        var onChanged: (CGSize) -> Void
+        var onEnded: () -> Void
+        var isEditDragActive: () -> Bool
         let onAttached: (() -> Void)?
         private weak var scopeView: UIView?
         private var didAttach = false
-        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, onAttached: (() -> Void)?) {
-            self.onChanged = onChanged; self.onEnded = onEnded; self.onAttached = onAttached
+        init(onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, isEditDragActive: @escaping () -> Bool, onAttached: (() -> Void)?) {
+            self.onChanged = onChanged; self.onEnded = onEnded; self.isEditDragActive = isEditDragActive; self.onAttached = onAttached
         }
         func attachIfNeeded(scopeView: UIView) {
             self.scopeView = scopeView
@@ -1474,16 +1492,18 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
             default: break
             }
         }
-        // Only a gesture that actually starts over the canvas's own area should pan it - the recognizer
-        // itself is window-wide so it can see both fingers regardless of which view was hit-tested.
+        // Only a gesture that actually starts over the canvas's own area, and not while a single-finger edit
+        // drag is already under way there, should pan it - the recognizer itself is window-wide so it can
+        // see both fingers regardless of which view was hit-tested.
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let scopeView else { return false }
+            guard let scopeView, !isEditDragActive() else { return false }
             let point = gestureRecognizer.location(in: scopeView)
             return scopeView.bounds.contains(point)
         }
         // Lets this coexist with every single-finger gesture already tracking a touch it also observes, and
         // with the canvas's own pinch-to-zoom (also two-finger), rather than one stealing the gesture from
-        // the other.
+        // the other. (isEditDragActive, above, is what actually keeps an edit drag and a pan from both
+        // mutating the diagram at once - this delegate method only governs simultaneous *recognition*.)
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     }
 }

@@ -1021,7 +1021,11 @@ final class CircuitCanvasUITests: XCTestCase {
             let hint = element(app, "operation-hint")
             XCTAssertTrue(hint.exists)
             let original = hint.frame
-            let beforeOffset = canvas.value as? String
+            // Just the offset, not the whole -value string: a successful pinch right below legitimately
+            // changes the scale portion of that string, which must not fail this "did not pan" check
+            // (Codex major, 5B round 2 - the previous whole-string comparison could fail on a working pinch
+            // even with zero pan).
+            let beforeOffset = element(app,"canvas-offset-exact").value as? String
             // A pinch here is best-effort only: XCUITest's synthetic pinch has been unreliable in this
             // harness (see the note on testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale) - the
             // real guarantee for this comes from setZoom(_:)'s own tests.
@@ -1030,7 +1034,7 @@ final class CircuitCanvasUITests: XCTestCase {
             // These tools no longer pan on a one-finger drag at all (5B, 2026-09-29 feedback) - confirming
             // that (not just that the hint didn't move) is what makes this a meaningful regression guard now.
             source.press(forDuration:0.1,thenDragTo:source.withOffset(CGVector(dx:-60,dy:-50)))
-            XCTAssertEqual(canvas.value as? String,beforeOffset,"\(button) must not pan on a one-finger drag")
+            XCTAssertEqual(element(app,"canvas-offset-exact").value as? String,beforeOffset,"\(button) must not pan on a one-finger drag")
             XCTAssertEqual(hint.frame.minX,original.minX,accuracy:1)
             XCTAssertEqual(hint.frame.minY,original.minY,accuracy:1)
             XCTAssertEqual(hint.frame.width,original.width,accuracy:1)
