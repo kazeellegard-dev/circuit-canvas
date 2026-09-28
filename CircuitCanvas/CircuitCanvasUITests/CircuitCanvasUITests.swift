@@ -1024,7 +1024,8 @@ final class CircuitCanvasUITests: XCTestCase {
         let field = app.textViews["live-edit-field"]
         XCTAssertTrue(field.waitForExistence(timeout:2))
 
-        // A drag over the (now dimmed, underlying) note must not move it while its body is being edited.
+        // A drag over the note - still visible and interactive-looking through the scrim's hole over it -
+        // must not actually move it while its body is being edited.
         let before = note.value as? String
         let start = note.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: 60, dy: 60)))
@@ -1035,6 +1036,52 @@ final class CircuitCanvasUITests: XCTestCase {
         app.buttons["live-edit-done"].tap()
         app.navigationBars["インスペクタ"].swipeDown()
         XCTAssertTrue(element(app,"experiment-note-R12を変更").waitForExistence(timeout:2))
+
+        // The edit must actually have been saved to the model (Codex minor, 5D round 1: this test used to
+        // stop at an assertion that could not fail even if the body write itself had silently done nothing).
+        note.tap()
+        app.buttons["確認"].tap()
+        app.buttons["note-body-editor"].tap()
+        let reopened = app.textViews["live-edit-field"]
+        XCTAssertTrue(reopened.waitForExistence(timeout:2))
+        XCTAssertTrue((reopened.value as? String ?? "").contains("追記"),"the body edit must have been saved")
+        app.buttons["live-edit-done"].tap()
+    }
+
+    @MainActor
+    func testEditModeToggleIsDisabledWhileLiveEditing() throws {
+        let app = XCUIApplication(); app.launch()
+        let symbol = element(app,"symbol-Main MCU")
+        XCTAssertTrue(symbol.waitForExistence(timeout:3))
+        symbol.tap()
+        app.buttons["確認"].tap()
+        app.buttons["inspector-symbol-title"].tap()
+        XCTAssertTrue(app.textFields["live-edit-field"].waitForExistence(timeout:2))
+        // Entering edit mode clears the very selection the live-edit card depends on, which would strand it
+        // with no way back to the inspector (Codex major, 5D round 1).
+        XCTAssertFalse(app.buttons["edit-mode-toggle"].isEnabled,"edit mode must be unreachable while live-editing")
+        app.buttons["live-edit-done"].tap()
+        XCTAssertTrue(app.buttons["edit-mode-toggle"].isEnabled,"edit mode must work again once live-editing ends")
+    }
+
+    @MainActor
+    func testUndoIsDisabledWhileLiveEditingAFreshlyAddedItem() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        XCTAssertTrue(element(app,"text-テキスト").waitForExistence(timeout:2))
+        XCTAssertTrue(app.buttons["undo-button"].isEnabled,"placing the text item must have pushed an undo step")
+
+        element(app,"text-テキスト").tap()
+        app.buttons["確認"].tap()
+        app.buttons["text-body-editor"].tap()
+        XCTAssertTrue(app.textViews["live-edit-field"].waitForExistence(timeout:2))
+        // Undoing here would delete the very item the edit card is bound to, stranding the card with no
+        // valid binding and no way to close (Codex major, 5D round 1).
+        XCTAssertFalse(app.buttons["undo-button"].isEnabled,"undo must be unreachable while live-editing a freshly added item")
+        app.buttons["live-edit-done"].tap()
+        XCTAssertTrue(app.buttons["undo-button"].isEnabled,"undo must work again once live-editing ends")
     }
 
     @MainActor

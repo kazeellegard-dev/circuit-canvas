@@ -218,15 +218,18 @@ struct ContentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     // Left enabled during edit mode on purpose: undoing an accidental delete is exactly the
                     // safety net this exists for, and it would defeat the point to grey it out right then.
+                    // Disabled during live-editing (5D) though - restoring/discarding the very item currently
+                    // bound to the edit card out from under it left the card stranded with no way to close
+                    // (Codex major, 5D round 1).
                     Button("元に戻す", systemImage: "arrow.uturn.backward") {
                         if undoStack.isEmpty { undoRedoUnavailableReason = "取り消す操作がありません" } else { performUndo() }
                     }
-                    .disabled(undoStack.isEmpty)
+                    .disabled(undoStack.isEmpty || liveEdit != nil)
                     .accessibilityIdentifier("undo-button")
                     Button("やり直す", systemImage: "arrow.uturn.forward") {
                         if redoStack.isEmpty { undoRedoUnavailableReason = "やり直す操作がありません" } else { performRedo() }
                     }
-                    .disabled(redoStack.isEmpty)
+                    .disabled(redoStack.isEmpty || liveEdit != nil)
                     .accessibilityIdentifier("redo-button")
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(toolbarDisabled)
@@ -259,6 +262,11 @@ struct ContentView: View {
                         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(editMode ? .red : nil)
+                    // Not gated by toolbarDisabled (that would be circular - it is what flips editMode itself)
+                    // but must still be unreachable during live-editing (5D): entering edit mode clears the
+                    // very selection the live-edit card depends on, stranding it with no way back to the
+                    // inspector (Codex major, 5D round 1).
+                    .disabled(liveEdit != nil)
                     .accessibilityIdentifier("edit-mode-toggle")
                     Button("確認", systemImage: "slider.horizontal.3") { inspectorSessionPushed = false; showInspector = true }
                         .disabled(toolbarDisabled)
@@ -439,17 +447,21 @@ struct ContentView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
                 // Live-editing (5D) lives in viewport space, not canvas space: the edited item can sit
-                // anywhere on the (much larger, pannable/zoomable) canvas, including right at its edge, and
-                // a card centered exactly on its canvas position could then land partly off-screen - clamped
-                // here to always stay fully reachable and tappable regardless of where the item is.
-                if let target = liveEdit, let binding = liveEditBinding(for: target), let canvasPosition = liveEditPosition(for: target) {
-                    Rectangle().fill(Color.black.opacity(0.45))
+                // anywhere on the (much larger, pannable/zoomable) canvas. The scrim leaves a hole exactly
+                // over the target's own on-screen bounds, so its real card - the actual look this feature
+                // exists to let the user watch, wrapping and all - stays visible and updating live, instead
+                // of being covered by a synthetic stand-in (Codex major, 5D round 1). The input card itself
+                // sits just below (or, if that would run off-screen, above) that hole, never on top of it.
+                if let target = liveEdit, let binding = liveEditBinding(for: target) {
+                    let hole = liveEditTargetRect(for: target, viewportSize: proxy.size)
+                    ScrimWithHole(hole: hole)
+                        .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
                         .frame(width: proxy.size.width, height: proxy.size.height)
-                        .contentShape(Rectangle())
+                        .contentShape(ScrimWithHole(hole: hole), eoFill: true)
                         .onTapGesture {}
                         .accessibilityIdentifier("live-edit-scrim")
                     liveEditCard(text: binding, multiline: liveEditIsMultiline(target))
-                        .position(liveEditViewportPosition(for: target, canvasPosition: canvasPosition, viewportSize: proxy.size))
+                        .position(liveEditCardPosition(near: hole, cardSize: liveEditCardSize(target), viewportSize: proxy.size))
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -996,15 +1008,33 @@ struct ContentView: View {
         case .textBody(let id): textBinding(for: id)?.body
         }
     }
-    private func liveEditPosition(for target: LiveEditTarget) -> CGPoint? {
-        switch target {
-        case .symbolTitle(let id): symbols.first(where: { $0.id == id })?.position
-        case .noteTitle(let id), .noteBody(let id): notes.first(where: { $0.id == id })?.position
-        case .textBody(let id): texts.first(where: { $0.id == id })?.position
-        }
-    }
     private func liveEditIsMultiline(_ target: LiveEditTarget) -> Bool {
         switch target { case .noteBody, .textBody: true; case .symbolTitle, .noteTitle: false }
+    }
+    /// The target's own on-screen (viewport) bounds - canvas-space geometry transformed by the current
+    /// scale/offset, same math as every card's own `.position(...)`. This is the scrim's hole (Codex major,
+    /// 5D round 1): the target's real card must stay visible and un-dimmed inside it, since watching that
+    /// real rendering update live is this whole feature's point. A text item has no fixed bounds of its
+    /// own (its size follows its content) - approximated generously rather than measured exactly, which
+    /// only ever costs a slightly larger hole than strictly necessary, never a clipped one.
+    private func liveEditTargetRect(for target: LiveEditTarget, viewportSize: CGSize) -> CGRect {
+        func toViewport(_ r: CGRect) -> CGRect {
+            CGRect(x: r.minX * canvasScale + canvasOffset.width, y: r.minY * canvasScale + canvasOffset.height,
+                   width: r.width * canvasScale, height: r.height * canvasScale)
+        }
+        let fallback = CGRect(x: viewportSize.width/2 - 40, y: viewportSize.height/2 - 20, width: 80, height: 40)
+        switch target {
+        case .symbolTitle(let id):
+            guard let symbol = symbols.first(where: { $0.id == id }) else { return fallback }
+            return toViewport(symbol.kind.body(at: symbol.position, rotation: symbol.rotation, size: symbol.size))
+        case .noteTitle(let id), .noteBody(let id):
+            guard let note = notes.first(where: { $0.id == id }) else { return fallback }
+            return toViewport(CGRect(x: note.position.x - note.size.width/2, y: note.position.y - note.size.height/2, width: note.size.width, height: note.size.height))
+        case .textBody(let id):
+            guard let text = texts.first(where: { $0.id == id }) else { return fallback }
+            let approximateSize = CGSize(width: 220, height: 80)
+            return toViewport(CGRect(x: text.position.x - approximateSize.width/2, y: text.position.y - approximateSize.height/2, width: approximateSize.width, height: approximateSize.height))
+        }
     }
     /// The card's approximate footprint (see liveEditCard) - only needed to keep it fully inside the
     /// viewport; does not need to track the card's real layout exactly, just closely enough that nothing
@@ -1012,14 +1042,17 @@ struct ContentView: View {
     private func liveEditCardSize(_ target: LiveEditTarget) -> CGSize {
         liveEditIsMultiline(target) ? CGSize(width: 284, height: 220) : CGSize(width: 244, height: 110)
     }
-    private func liveEditViewportPosition(for target: LiveEditTarget, canvasPosition: CGPoint, viewportSize: CGSize) -> CGPoint {
-        let screenPoint = CGPoint(x: canvasPosition.x * canvasScale + canvasOffset.width, y: canvasPosition.y * canvasScale + canvasOffset.height)
-        let size = liveEditCardSize(target)
-        let margin: CGFloat = 8
-        let halfW = size.width / 2, halfH = size.height / 2
-        let x = min(max(screenPoint.x, halfW + margin), max(halfW + margin, viewportSize.width - halfW - margin))
-        let y = min(max(screenPoint.y, halfH + margin), max(halfH + margin, viewportSize.height - halfH - margin))
-        return CGPoint(x: x, y: y)
+    /// Below the target's hole by default - above it instead when there is not enough room below - so the
+    /// input card and the target's own real, live-updating card are both visible at once, never overlapping
+    /// (Codex major, 5D round 1).
+    private func liveEditCardPosition(near hole: CGRect, cardSize: CGSize, viewportSize: CGSize) -> CGPoint {
+        let margin: CGFloat = 12
+        let halfW = cardSize.width / 2, halfH = cardSize.height / 2
+        var y = hole.maxY + margin + halfH
+        if y + halfH + margin > viewportSize.height { y = hole.minY - margin - halfH }
+        let x = min(max(hole.midX, halfW + margin), max(halfW + margin, viewportSize.width - halfW - margin))
+        let clampedY = min(max(y, halfH + margin), max(halfH + margin, viewportSize.height - halfH - margin))
+        return CGPoint(x: x, y: clampedY)
     }
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
@@ -1644,6 +1677,19 @@ private struct TextCard: View {
                     .accessibilityIdentifier("text-\(text.body)-edit-delete")
                 }
             }
+    }
+}
+
+/// The live-edit (5D) scrim: the full viewport rect, with `hole` cut out via the even-odd fill/hit-test rule
+/// so the target's own real card shows through undimmed and still tappable-through-to-nothing (its own
+/// gestures are separately guarded off during live-editing) rather than being covered like everything else.
+private struct ScrimWithHole: Shape {
+    let hole: CGRect
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRect(rect)
+        path.addRect(hole)
+        return path
     }
 }
 
