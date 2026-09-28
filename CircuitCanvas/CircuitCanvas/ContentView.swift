@@ -824,9 +824,9 @@ struct ContentView: View {
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
-                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; tool = .select }
-                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); tool = .select; reroute() }
-                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; tool = .select }
+                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; tool = .select }
+                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); selectedSymbol = nil; selectedNote = nil; selectedText = nil; tool = .select; reroute() }
+                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; selectedSymbol = nil; selectedNote = nil; tool = .select }
                 else { selectedNote = nil; selectedSymbol = nil; selectedText = nil }
             }
     }

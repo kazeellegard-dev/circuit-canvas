@@ -932,6 +932,27 @@ final class CircuitCanvasUITests: XCTestCase {
     }
 
     @MainActor
+    func testPlacingATextItemClearsAPreviouslySelectedSymbol() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        element(app,"symbol-24 V → 5 V").tap()
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.staticTexts["シンボル"].waitForExistence(timeout:2))
+        app.navigationBars["インスペクタ"].swipeDown()
+
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        XCTAssertTrue(element(app,"text-テキスト").waitForExistence(timeout:2))
+
+        // Codex minor (5C round 1): placing a text left the earlier symbol selection dangling, so the
+        // inspector (which checks selectedSymbol first) still showed the old symbol instead of the new text.
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.staticTexts["テキスト"].waitForExistence(timeout:2),"the inspector must show the just-placed text, not a stale symbol selection")
+        XCTAssertFalse(app.staticTexts["シンボル"].exists)
+    }
+
+    @MainActor
     func testUndoRedoOnAddingAndDeletingATextItem() throws {
         let app = XCUIApplication(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
