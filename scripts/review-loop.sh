@@ -117,7 +117,7 @@ else
       GATE_EXIT=0
       xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -destination "id=$SIM_ID" \
         -parallel-testing-enabled NO -retry-tests-on-failure -test-iterations 2 \
-        "${ONLY_TESTING_ARGS[@]}" \
+        "${ONLY_TESTING_ARGS[@]+"${ONLY_TESTING_ARGS[@]}"}" \
         -resultBundlePath "$GATE_XCRESULT" > "$RUN_DIR/gate.log" 2>&1 || GATE_EXIT=$?
     }
     run_gate
