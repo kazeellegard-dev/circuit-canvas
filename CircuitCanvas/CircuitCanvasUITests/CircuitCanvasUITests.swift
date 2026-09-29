@@ -3009,14 +3009,16 @@ final class CircuitCanvasUITests: XCTestCase {
     /// horizontally - or, for a target too tall to leave room on either side, sit on top of it.
     /// `expected`: the real elements (as XCUITest itself locates them) the highlight must cover - so a
     /// locator that found the wrong view cannot pass just because the bubble sits next to whatever it found.
-    @MainActor private func assertBubbleIsNextToItsTarget(_ app: XCUIApplication, step: String, expected: [XCUIElement], file: StaticString = #filePath, line: UInt = #line) {
+    /// `expected` holds on-screen rects rather than elements because the canvas element reports the whole
+    /// 2400x1800 canvas as its frame, not the visible viewport (see visibleCanvasRect).
+    @MainActor private func assertBubbleIsNextToItsTarget(_ app: XCUIApplication, step: String, expected: [CGRect], file: StaticString = #filePath, line: UInt = #line) {
         let bubble = element(app, "coachmark").frame
         guard let target = rect(element(app, "coachmark-target").value) else {
             return XCTFail("step \(step): no highlighted target (\(String(describing: element(app, "coachmark-target").value)))", file: file, line: line)
         }
         XCTAssertFalse(expected.isEmpty, "step \(step): name the element(s) the highlight must cover", file: file, line: line)
-        for element in expected {
-            XCTAssertTrue(target.insetBy(dx: -2, dy: -2).contains(element.frame), "step \(step): highlight \(target) must cover \(element.identifier.isEmpty ? element.label : element.identifier) \(element.frame)", file: file, line: line)
+        for frame in expected {
+            XCTAssertTrue(target.insetBy(dx: -2, dy: -2).contains(frame), "step \(step): highlight \(target) must cover \(frame)", file: file, line: line)
         }
         XCTAssertTrue(bubble.minX < target.maxX && bubble.maxX > target.minX, "step \(step): bubble \(bubble) must overlap target \(target) horizontally", file: file, line: line)
         let gap = min(abs(bubble.minY - target.maxY), abs(target.minY - bubble.maxY))
@@ -3047,19 +3049,25 @@ final class CircuitCanvasUITests: XCTestCase {
         let bubble = element(app, "coachmark")
         XCTAssertTrue(bubble.waitForExistence(timeout: 3), "O1: the tour starts by itself on a first launch")
         let titles = ["ライブラリ", "追加と配線", "キャンバス", "確認（インスペクタ）", "拡大・縮小と移動"]
-        let targets: [[XCUIElement]] = [
-            [element(app, "library-category-電源"), element(app, "library-category-テキスト")],
-            [app.buttons["配線"], app.buttons["＋シンボル"], app.buttons["＋メモ"]],
-            [element(app, "circuit-canvas")],
-            [app.buttons["確認"]],
-            [app.buttons["zoom-menu"]]
+        // The visible canvas: the canvas element's top-left, sized to the viewport the app reports.
+        func visibleCanvasRect() -> CGRect {
+            let size = (element(app, "viewport-size").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            let origin = element(app, "circuit-canvas").frame.origin
+            return size.count == 2 ? CGRect(x: origin.x, y: origin.y, width: size[0], height: size[1]) : .null
+        }
+        let targets: [() -> [CGRect]] = [
+            { [self.element(app, "library-category-電源").frame, self.element(app, "library-category-テキスト").frame] },
+            { [app.buttons["配線"].frame, app.buttons["＋シンボル"].frame, app.buttons["＋メモ"].frame] },
+            { [visibleCanvasRect()] },
+            { [app.buttons["確認"].frame] },
+            { [app.buttons["zoom-menu"].frame] }
         ]
         for (index, title) in titles.enumerated() {
             let progress = element(app, "coachmark-progress")
             XCTAssertTrue(progress.waitForExistence(timeout: 2))
             XCTAssertEqual(progress.label, "\(index + 1) / \(titles.count)")
             XCTAssertEqual(element(app, "coachmark-title").label, title)
-            assertBubbleIsNextToItsTarget(app, step: title, expected: targets[index])
+            assertBubbleIsNextToItsTarget(app, step: title, expected: targets[index]())
             XCTAssertEqual(app.buttons["coachmark-next"].label, index == titles.count - 1 ? "完了" : "次へ")
             app.buttons["coachmark-next"].tap()
         }
@@ -3117,7 +3125,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3), "O5: 使い方を見る replays the tour")
         XCTAssertFalse(app.navigationBars["設定"].exists, "and closes Settings first, so the tour points at the real screen")
         XCTAssertEqual(element(app, "coachmark-progress").label, "1 / 5")
-        assertBubbleIsNextToItsTarget(app, step: "replay 1", expected: [element(app, "library-category-電源")])
+        assertBubbleIsNextToItsTarget(app, step: "replay 1", expected: [element(app, "library-category-電源").frame])
         app.buttons["coachmark-next"].tap()
         XCTAssertEqual(element(app, "coachmark-progress").label, "2 / 5")
         app.buttons["coachmark-skip"].tap()
