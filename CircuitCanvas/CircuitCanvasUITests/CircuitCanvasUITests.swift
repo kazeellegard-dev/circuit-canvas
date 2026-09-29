@@ -273,6 +273,10 @@ final class CircuitCanvasUITests: XCTestCase {
             let v = viewport(), o = offsetAndScale()
             return CGPoint(x: (v[0]/2 - o.x)/o.scale, y: (v[1]/2 - o.y)/o.scale)
         }
+        // A one-finger drag only pans while the dedicated pan tool is active (5B, 2026-09-29 feedback - added
+        // after this test was first written); this full-regression run is what caught it never having been
+        // updated for that, so it silently panned nothing at all and failed every one of its own assertions.
+        app.buttons["pan-mode-toggle"].tap()
         // Pan (in several safe-sized steps, each a fresh gesture from the same screen point, so their
         // translations accumulate) far enough that this necessarily reaches boundedCanvasOffset's 200pt edge
         // margin - exactly the situation the fixed setZoom(_:) must not disturb (Codex major, 4E round 1).
