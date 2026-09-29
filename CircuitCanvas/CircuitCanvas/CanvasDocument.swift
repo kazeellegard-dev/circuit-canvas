@@ -61,15 +61,39 @@ struct CanvasDocument: Codable, Equatable {
         return document
     }
 
+    enum WriteError: LocalizedError {
+        /// The file on disk is no longer the one this app last read or wrote.
+        case modifiedElsewhere
+        var errorDescription: String? { "ほかの端末やアプリで、このファイルが変更されています。" }
+    }
+
     /// Reads a file picked in Files (or opened from it), which may live outside the sandbox (iCloud Drive).
-    static func read(from url: URL) throws -> CanvasDocument {
-        try FileAccess.coordinated(url, writing: false) { try decoded(from: Data(contentsOf: $0)) }
+    static func read(from url: URL) throws -> CanvasDocument { try readWithDate(from: url).document }
+
+    /// Also returns the file's modification date, taken inside the same coordinated read as the content, so
+    /// the date can never belong to a newer version than the content it is later compared against.
+    static func readWithDate(from url: URL) throws -> (document: CanvasDocument, modified: Date?) {
+        try FileAccess.coordinated(url, writing: false) { url in
+            let document = try decoded(from: Data(contentsOf: url))
+            return (document, FileAccess.modificationDate(ofCoordinated: url))
+        }
     }
 
     /// Writes atomically, so a failure part-way leaves the previous file intact.
-    func write(to url: URL) throws {
+    func write(to url: URL) throws { _ = try write(to: url, unlessModifiedSince: nil) }
+
+    /// Writes atomically unless the file on disk changed since `expected` (its date when last read or
+    /// written): then throws WriteError.modifiedElsewhere and leaves it untouched. The check and the write
+    /// happen in one coordinated section, so another writer cannot slip in between them. Returns the new date.
+    func write(to url: URL, unlessModifiedSince expected: Date?) throws -> Date? {
         let data = try encoded()
-        try FileAccess.coordinated(url, writing: true) { try data.write(to: $0, options: .atomic) }
+        return try FileAccess.coordinated(url, writing: true) { url in
+            if let expected, let onDisk = FileAccess.modificationDate(ofCoordinated: url), onDisk != expected {
+                throw WriteError.modifiedElsewhere
+            }
+            try data.write(to: url, options: .atomic)
+            return FileAccess.modificationDate(ofCoordinated: url)
+        }
     }
 }
 
@@ -96,12 +120,11 @@ enum FileAccess {
         return try result.get()
     }
 
-    /// The file's modification date as it is now on disk (nil if it cannot be read), used to notice that
-    /// another device or app changed a file since this app last read or wrote it.
-    static func modificationDate(of url: URL) -> Date? {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    /// The file's modification date as it is now on disk (nil if it does not exist), for use inside a
+    /// coordinated section - used to notice that another device or app changed the file since this app last
+    /// read or wrote it. Never a cached value: URL caches resource values per instance.
+    static func modificationDate(ofCoordinated url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)))?[.modificationDate] as? Date
     }
 }
 

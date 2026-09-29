@@ -29,6 +29,16 @@ enum ExportLayout {
         return area.isNull || area.isEmpty ? nil : area
     }
 
+    /// What a symbol paints on the canvas, in canvas coordinates: its body with room for the pins' rings,
+    /// and its name, which for a circuit symbol hangs outside the body (SymbolKind.labelRect).
+    static func symbolRects(_ symbol: SymbolItem) -> [CGRect] {
+        let body = symbol.kind.body(at: symbol.position, rotation: symbol.rotation, size: symbol.size).insetBy(dx: -8, dy: -8)
+        guard let label = symbol.kind.labelRect(title: symbol.title, rotation: symbol.rotation, size: symbol.size, blockPins: symbol.blockPins)
+        else { return [body] }
+        // A little slack for font rendering differences.
+        return [body, label.offsetBy(dx: symbol.position.x, dy: symbol.position.y).insetBy(dx: -4, dy: -4)]
+    }
+
     /// A file name without the characters Files and Finder refuse.
     static func fileName(for name: String) -> String {
         let cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/:\\")).joined(separator: "-")

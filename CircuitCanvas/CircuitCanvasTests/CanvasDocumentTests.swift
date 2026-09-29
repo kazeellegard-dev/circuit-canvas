@@ -58,6 +58,29 @@ import Testing
         }
     }
 
+    @Test func aFileChangedElsewhereIsNotOverwritten() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).circuitcanvas")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let mine = sample()
+        let written = try mine.write(to: url, unlessModifiedSince: nil)
+        let (read, readDate) = try CanvasDocument.readWithDate(from: url)
+        #expect(read == mine)
+        #expect(readDate == written)
+
+        // Another device (via iCloud Drive) replaces the file after this app last read it.
+        var theirs = mine; theirs.name = "ほかの端末"
+        try theirs.encoded().write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: url.path(percentEncoded: false))
+        var edited = mine; edited.name = "この端末"
+        #expect(throws: CanvasDocument.WriteError.self) { try edited.write(to: url, unlessModifiedSince: readDate) }
+        #expect(try CanvasDocument.read(from: url).name == "ほかの端末", "the other device's version must survive")
+
+        // Overwriting on purpose (no expected date) still works, and reports the new date.
+        let forced = try edited.write(to: url, unlessModifiedSince: nil)
+        #expect(try CanvasDocument.readWithDate(from: url).modified == forced)
+        #expect(try CanvasDocument.read(from: url).name == "この端末")
+    }
+
     @Test func aFailedReadNeverTouchesTheFile() throws {
         let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).circuitcanvas")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -85,6 +108,28 @@ import Testing
     @Test func boundsStayOnTheCanvas() {
         let area = ExportLayout.bounds(of: [CGRect(x: 5, y: 10, width: 2390, height: 1785)], in: canvas)
         #expect(area == canvas)
+    }
+
+    /// A circuit symbol's name hangs outside its body (below it, or to its right when turned): the exported
+    /// area must still hold all of it, however long, at every rotation.
+    @Test func exportedAreaHoldsASymbolsWholeNameAtEveryRotation() throws {
+        for rotation in [0, 90, 180, 270] {
+            var symbol = SymbolItem(title: "R12 10kΩ 1/4W 金属皮膜 抵抗器", kind: .resistor, position: CGPoint(x: 1200, y: 900))
+            symbol.rotation = rotation
+            let label = try #require(symbol.kind.labelRect(title: symbol.title, rotation: rotation, size: symbol.size, blockPins: symbol.blockPins))
+                .offsetBy(dx: symbol.position.x, dy: symbol.position.y)
+            let area = try #require(ExportLayout.bounds(of: ExportLayout.symbolRects(symbol), in: canvas))
+            #expect(area.contains(label), "rotation \(rotation): label \(label) outside \(area)")
+            // The label really is outside the body: without it the area would be too small.
+            let bodyOnly = try #require(ExportLayout.bounds(of: [symbol.kind.body(at: symbol.position, rotation: rotation, size: symbol.size)], in: canvas))
+            #expect(!bodyOnly.contains(label), "rotation \(rotation)")
+        }
+    }
+
+    @Test func aBlocksTitleIsInsideItsBody() {
+        let block = SymbolItem(title: "Main MCU", kind: .block, position: CGPoint(x: 300, y: 300))
+        #expect(block.kind.labelRect(title: block.title, rotation: 0, size: block.size, blockPins: block.blockPins) == nil)
+        #expect(ExportLayout.symbolRects(block).count == 1)
     }
 
     @Test func fileNamesAvoidPathSeparators() {

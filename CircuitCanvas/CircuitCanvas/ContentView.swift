@@ -198,6 +198,11 @@ struct ContentView: View {
     @State private var showExport = false
     @State private var showFileConflict = false
     @State private var pendingReplacement: DocumentReplacement?
+    /// 「保存…」 chosen in the unsaved-changes alert: carried out once that save succeeds, dropped if it fails
+    /// (leaving the current diagram as it is). A cancelled save panel reports nothing on this OS version's
+    /// FileDocument exporter, so every other way of starting a save clears it too - a later, unrelated save
+    /// can never carry out a replacement the user had abandoned.
+    @State private var replacementAfterSave: DocumentReplacement?
     @State private var fileErrorMessage: String?
     // MARK: Onboarding coachmarks (3D)
     @AppStorage("onboardingDismissed") private var onboardingDismissed = false
@@ -278,9 +283,9 @@ struct ContentView: View {
                             .accessibilityIdentifier("file-new")
                         Button("開く…", systemImage: "folder") { requestReplacingDocument(.pick) }
                             .accessibilityIdentifier("file-open")
-                        Button("保存", systemImage: "square.and.arrow.down") { saveDocument() }
+                        Button("保存", systemImage: "square.and.arrow.down") { replacementAfterSave = nil; saveDocument() }
                             .accessibilityIdentifier("file-save")
-                        Button("別名で保存…", systemImage: "square.and.arrow.down.on.square") { showSaveAs = true }
+                        Button("別名で保存…", systemImage: "square.and.arrow.down.on.square") { replacementAfterSave = nil; showSaveAs = true }
                             .accessibilityIdentifier("file-save-as")
                         Divider()
                         Button("書き出す（PDF・PNG）…", systemImage: "square.and.arrow.up") { showExport = true }
@@ -411,46 +416,8 @@ struct ContentView: View {
                 .accessibilityValue(documentStateValue)
                 .allowsHitTesting(false)
         }
-        .onChange(of: currentDocument) { scheduleAutosave() }
+        .background { fileHandlers }
         .focusedSceneValue(\.documentCommands, documentCommands)
-        .onOpenURL { url in requestReplacingDocument(.url(url)) }
-        .fileImporter(isPresented: $showOpen, allowedContentTypes: [.circuitCanvas]) { result in
-            switch result {
-            case .success(let url): openDocument(at: url)
-            case .failure(let error): fileErrorMessage = "開けませんでした。\n\(error.localizedDescription)"
-            }
-        }
-        .background {
-            // On its own view: SwiftUI does not reliably present two file panels attached to the same one.
-            let document = currentDocument
-            Color.clear
-                .fileExporter(isPresented: $showSaveAs, document: CanvasFileDocument(document: document), contentType: .circuitCanvas,
-                              defaultFilename: canvasName) { savedAs($0, document: document) }
-        }
-        .sheet(isPresented: $showExport) { exportSheet }
-        .alert("保存されていない変更があります", isPresented: Binding(get: { pendingReplacement != nil }, set: { if !$0 { pendingReplacement = nil } })) {
-            Button("保存しないで続ける", role: .destructive) {
-                if let action = pendingReplacement { autosavePaused = false; performReplacement(action) }
-                pendingReplacement = nil
-            }
-            Button("保存…") { pendingReplacement = nil; saveDocument() }
-            Button("キャンセル", role: .cancel) { pendingReplacement = nil }
-        } message: {
-            Text("今のキャンバスの内容は保存されていません。保存しないで続けると、失われます。")
-        }
-        .alert("ファイルがほかで変更されています", isPresented: $showFileConflict) {
-            Button("ファイルから読み込み直す", role: .destructive) { if let documentURL { openDocument(at: documentURL) } }
-            Button("上書きして保存") { writeCurrentFile(force: true) }
-            Button("別名で保存…") { showSaveAs = true }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text("ほかの端末やアプリで、このファイルが変更されました。上書きしないように、自動保存を止めています。")
-        }
-        .alert("ファイル", isPresented: Binding(get: { fileErrorMessage != nil }, set: { if !$0 { fileErrorMessage = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(fileErrorMessage ?? "")
-        }
         .alert("使い方の説明を終わります", isPresented: $showOnboardingFinish) {
             Button("次回から表示しない") { onboardingDismissed = true }
             Button("次回も表示する", role: .cancel) { onboardingDismissed = false }
@@ -1350,13 +1317,16 @@ struct ContentView: View {
     }
     private var documentCommands: DocumentCommandActions {
         DocumentCommandActions(new: { requestReplacingDocument(.new) }, open: { requestReplacingDocument(.pick) },
-                               save: saveDocument, saveAs: { showSaveAs = true }, export: { showExport = true })
+                               save: { replacementAfterSave = nil; saveDocument() }, saveAs: { replacementAfterSave = nil; showSaveAs = true },
+                               export: { showExport = true })
     }
     /// 新規 / 開く replace the whole diagram. A file-backed diagram is saved first (it autosaves anyway);
     /// an untitled one with content asks before its content is thrown away.
     private func requestReplacingDocument(_ action: DocumentReplacement) {
         guard !toolbarDisabled else { return }
-        if documentURL != nil, hasUnsavedChanges, !autosavePaused {
+        // Compared with the view position included (unlike hasUnsavedChanges): a pan or zoom still waiting
+        // for its autosave is written too, rather than cancelled by the replacement.
+        if documentURL != nil, !autosavePaused, currentDocument != documentBaseline {
             writeCurrentFile(force: false)
             if showFileConflict { return }   // the conflict has to be resolved first
         }
@@ -1376,10 +1346,10 @@ struct ContentView: View {
     }
     private func openDocument(at url: URL) {
         do {
-            let document = try CanvasDocument.read(from: url)
+            let (document, modified) = try CanvasDocument.readWithDate(from: url)
             autosaveTask?.cancel()
             apply(document)
-            documentURL = url; documentModificationDate = FileAccess.modificationDate(of: url); autosavePaused = false
+            documentURL = url; documentModificationDate = modified; autosavePaused = false
         } catch {
             fileErrorMessage = "「\(url.lastPathComponent)」を開けませんでした。\n\(error.localizedDescription)"
         }
@@ -1412,20 +1382,23 @@ struct ContentView: View {
     private func writeCurrentFile(force: Bool) {
         guard let url = documentURL else { return }
         autosaveTask?.cancel()
-        if !force, let known = documentModificationDate, let onDisk = FileAccess.modificationDate(of: url), onDisk != known {
-            autosavePaused = true; showFileConflict = true
-            return
-        }
         let document = currentDocument
         do {
-            try document.write(to: url)
+            documentModificationDate = try document.write(to: url, unlessModifiedSince: force ? nil : documentModificationDate)
             documentBaseline = document
-            documentModificationDate = FileAccess.modificationDate(of: url)
             autosavePaused = false
+            continueAfterSave()
+        } catch CanvasDocument.WriteError.modifiedElsewhere {
+            autosavePaused = true; replacementAfterSave = nil; showFileConflict = true
         } catch {
-            autosavePaused = true
+            autosavePaused = true; replacementAfterSave = nil
             fileErrorMessage = "「\(url.lastPathComponent)」に保存できませんでした。自動保存を止めています。\n\(error.localizedDescription)"
         }
+    }
+    private func continueAfterSave() {
+        guard let action = replacementAfterSave else { return }
+        replacementAfterSave = nil
+        performReplacement(action)
     }
     /// A file-backed diagram saves itself shortly after each change (also scrolling/zooming, so the view
     /// position comes back when it is reopened). Untitled ones are not written anywhere until saved.
@@ -1441,11 +1414,15 @@ struct ContentView: View {
     private func savedAs(_ result: Result<URL, Error>, document: CanvasDocument) {
         switch result {
         case .success(let url):
-            documentURL = url; documentBaseline = document
-            documentModificationDate = FileAccess.modificationDate(of: url); autosavePaused = false
-            // Anything changed while the save panel was up is written right away.
-            if currentDocument != document { scheduleAutosave() }
+            documentURL = url; documentBaseline = document; autosavePaused = false
+            documentModificationDate = try? FileAccess.coordinated(url, writing: false) { FileAccess.modificationDate(ofCoordinated: $0) }
+            if replacementAfterSave != nil {
+                continueAfterSave()
+            } else if currentDocument != document {
+                scheduleAutosave()   // anything changed while the save panel was up is written right away
+            }
         case .failure(let error):
+            replacementAfterSave = nil
             fileErrorMessage = "保存できませんでした。\n\(error.localizedDescription)"
         }
     }
@@ -1457,6 +1434,51 @@ struct ContentView: View {
         let url = FileManager.default.temporaryDirectory.appending(path: name)
         if FileManager.default.fileExists(atPath: url.path()) { openDocument(at: url) } else { documentURL = url }
     }
+    /// Autosave, the file panels, and the file alerts - on a view of their own, kept out of `body`'s already
+    /// long modifier chain (which the type checker cannot otherwise handle in reasonable time).
+    private var fileHandlers: some View {
+        Color.clear
+            .onChange(of: currentDocument) { scheduleAutosave() }
+            .onOpenURL { url in requestReplacingDocument(.url(url)) }
+            .fileImporter(isPresented: $showOpen, allowedContentTypes: [.circuitCanvas]) { result in
+                switch result {
+                case .success(let url): openDocument(at: url)
+                case .failure(let error): fileErrorMessage = "開けませんでした。\n\(error.localizedDescription)"
+                }
+            }
+            .background {
+                // On its own view: SwiftUI does not reliably present two file panels attached to the same one.
+                let document = currentDocument
+                Color.clear
+                    .fileExporter(isPresented: $showSaveAs, document: CanvasFileDocument(document: document), contentType: .circuitCanvas,
+                                  defaultFilename: canvasName) { savedAs($0, document: document) }
+            }
+            .sheet(isPresented: $showExport) { exportSheet }
+            .alert("保存されていない変更があります", isPresented: Binding(get: { pendingReplacement != nil }, set: { if !$0 { pendingReplacement = nil } })) {
+                Button("保存しないで続ける", role: .destructive) {
+                    if let action = pendingReplacement { autosavePaused = false; performReplacement(action) }
+                    pendingReplacement = nil
+                }
+                Button("保存…") { replacementAfterSave = pendingReplacement; pendingReplacement = nil; saveDocument() }
+                Button("キャンセル", role: .cancel) { pendingReplacement = nil }
+            } message: {
+                Text("今のキャンバスの内容は保存されていません。保存しないで続けると、失われます。")
+            }
+            .alert("ファイルがほかで変更されています", isPresented: $showFileConflict) {
+                Button("ファイルから読み込み直す", role: .destructive) { if let documentURL { openDocument(at: documentURL) } }
+                Button("上書きして保存") { writeCurrentFile(force: true) }
+                Button("別名で保存…") { replacementAfterSave = nil; showSaveAs = true }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("ほかの端末やアプリで、このファイルが変更されました。上書きしないように、自動保存を止めています。")
+            }
+            .alert("ファイル", isPresented: Binding(get: { fileErrorMessage != nil }, set: { if !$0 { fileErrorMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(fileErrorMessage ?? "")
+            }
+    }
+
     // MARK: Files - PDF/PNG export (MVP)
     private var exportSheet: some View {
         ExportSheet(name: canvasName, hasNotes: !notes.isEmpty) { includeNotes in exportDrawing(includeNotes: includeNotes) }
@@ -1464,8 +1486,7 @@ struct ContentView: View {
     /// The diagram alone, for export: no grid, selection, handles, badges or hint text, always in light
     /// colors on white, cropped to what is drawn (ExportLayout.bounds). nil when the canvas is empty.
     private func exportDrawing(includeNotes: Bool) -> ExportDrawing? {
-        // A non-block symbol's name is drawn outside its body, hence the extra room around each symbol.
-        var rects = symbols.map { $0.kind.body(at: $0.position, rotation: $0.rotation, size: $0.size).insetBy(dx: -28, dy: -28) }
+        var rects = symbols.flatMap(ExportLayout.symbolRects)
         rects += wires.flatMap { wire in (wire.points.isEmpty ? [wire.start, wire.end] : wire.points).map { CGRect(origin: $0, size: .zero) } }
         rects += texts.map { textCanvasFrames[$0.id] ?? CGRect(x: $0.position.x - 80, y: $0.position.y - 20, width: 160, height: 40) }
         if includeNotes {
@@ -2468,7 +2489,8 @@ private struct SymbolCard: View {
         }
     }
 
-    /// Horizontal symbols: just below the body. Vertical symbols: to the right of it.
+    /// Horizontal symbols: just below the body. Vertical symbols: to the right of it. Export computes the same
+    /// placement (SymbolKind.labelRect) to fit the name into the exported area - keep the two in step.
     /// Always upright, never part of the hit area. A zero-size frame anchors the text edge.
     @ViewBuilder private var label: some View {
         // The background(GeometryReader) is attached directly to the fixedSize() text, so it measures the

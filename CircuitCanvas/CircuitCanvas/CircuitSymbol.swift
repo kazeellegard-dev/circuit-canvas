@@ -411,3 +411,22 @@ struct CircuitGlyph: View {
                height:rotation % 180 == 0 ? kind.frameSize.height : kind.frameSize.width)
     }
 }
+
+extension SymbolKind {
+    /// Where a circuit symbol's name is painted, relative to its center - the same placement as SymbolCard's
+    /// `label` (keep the two in step): below a horizontal symbol, right of a vertical one, 10pt system font,
+    /// moved further out when pins sit on that edge. nil for a block (its title is inside) or an empty name.
+    func labelRect(title: String, rotation: Int, size: CGSize, blockPins: [BlockPin]) -> CGRect? {
+        guard !isBlock, !title.isEmpty else { return nil }
+        let bounds = body(at: .zero, rotation: rotation, size: size)
+        let offsets = pins(at: .zero, rotation: rotation, size: size, blockPins: blockPins)
+        let text = (title as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 10)])
+        if rotation % 180 == 0 {
+            let below: CGFloat = offsets.contains { abs($0.y - bounds.maxY) < 1 } ? 10 : 0
+            return CGRect(x: -text.width/2, y: bounds.height/2 + 3 + below, width: text.width, height: text.height)
+        } else {
+            let right: CGFloat = offsets.contains { abs($0.x - bounds.maxX) < 1 } ? 10 : 0
+            return CGRect(x: bounds.width/2 + 6 + right, y: -text.height/2, width: text.width, height: text.height)
+        }
+    }
+}
