@@ -1174,6 +1174,48 @@ final class CircuitCanvasUITests: XCTestCase {
         app.buttons["live-edit-done"].tap()
     }
 
+    @MainActor
+    func testLiveEditingRemainsOperableForAMaxSizedNoteAtMaximumZoom() throws {
+        let app = XCUIApplication()
+        // UITEST_INITIAL_ZOOM (see ContentView's onAppear) starts the canvas at its maximum 2.5x scale -
+        // XCUITest's synthetic pinch cannot reliably reach a non-preset scale in this harness, so this is the
+        // established way an existing test opts into one (see the 4E zoom tests).
+        app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "2.5"
+        app.launch()
+        let canvas = element(app,"circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout:3))
+        // Placed by tapping a point in SCREEN space (canvasTapGesture converts it through the current
+        // scale/offset), so this lands centrally on screen regardless of zoom - unlike the seed note, which
+        // at 2.5x zoom would itself sit too close to the viewport's edge to reliably drag its resize handle.
+        app.buttons["＋メモ"].tap()
+        canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:400,dy:300)).tap()
+        let note = element(app,"experiment-note-新しいメモ")
+        XCTAssertTrue(note.waitForExistence(timeout:2))
+
+        // Grow it to its maximum size (390x320 canvas-space) - combined with the 2.5x zoom this launched at,
+        // its on-screen footprint (up to 975x800) can exceed the whole viewport, which used to leave the
+        // input field and its 完了 button placed off screen and unreachable, with no way to zoom out during
+        // live-editing to recover (Codex major, 5D round 5).
+        note.tap()
+        let handle = element(app,"experiment-note-新しいメモ-resize-br")
+        XCTAssertTrue(handle.waitForExistence(timeout:2))
+        let handleStart = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handleStart.press(forDuration:0.05,thenDragTo:handleStart.withOffset(CGVector(dx:600,dy:600)))
+
+        note.tap()
+        app.buttons["確認"].tap()
+        app.buttons["note-body-editor"].tap()
+        let field = app.textViews["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+        XCTAssertTrue(field.isHittable,"the field must stay reachable even when the target's on-screen footprint exceeds the viewport")
+        field.tap()
+        field.typeText(" 追記")
+        let done = app.buttons["live-edit-done"]
+        XCTAssertTrue(done.isHittable,"the 完了 button must stay reachable too, or live-editing could never be exited")
+        done.tap()
+        XCTAssertTrue(app.navigationBars["インスペクタ"].waitForExistence(timeout:2),"confirming must still return to the inspector")
+    }
+
     /// Parses the "x=..;y=..;w=..;h=.." accessibility values this feature exposes for its hole/card rects
     /// back into a CGRect. Not a plain "x,y,w,h" comma join: a value that reads as a pure number can come
     /// back from XCUITest with locale grouping separators inserted into it (e.g. "2400" as "2,400"), which

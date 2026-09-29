@@ -1200,32 +1200,21 @@ struct ContentView: View {
         let minimumSize = LiveEditCardMetrics.minimumCardSize(multiline: multiline)
         if let p = tryAllSides(minimumSize) { return (p, minimumSize) }
 
-        // Not even the minimum fits fully on screen on any side (Codex major, 5D round 2's own counter-
-        // example: a hole tall/wide enough relative to the viewport that no side has minimumSize's worth of
-        // clearance) - place the minimum-size card by the SAME hole-relative formula the checked candidates
-        // above used, but without the "stays fully on screen" guard. That formula positions the card strictly
-        // outside the hole along the axis it was placed on (e.g. below: y = hole.maxY + margin + halfH) -
-        // unconditionally, regardless of the viewport's own bounds - so it still cannot overlap the hole. The
-        // trade-off in this practically-unreachable corner (this app's largest items are nowhere near a
-        // typical iPad viewport's own size) is that the card may extend past the viewport's edge instead of
-        // being squeezed smaller than it can actually render.
-        let belowAvail = viewportSize.height - hole.maxY - 2 * margin
-        let aboveAvail = hole.minY - 2 * margin
-        let rightAvail = viewportSize.width - hole.maxX - 2 * margin
-        let leftAvail = hole.minX - 2 * margin
-        let bySide = ["below": belowAvail, "above": aboveAvail, "right": rightAvail, "left": leftAvail]
-        let side = bySide.max { $0.value < $1.value }!.key
-        let halfW = minimumSize.width / 2, halfH = minimumSize.height / 2
-        switch side {
-        case "below":
-            return (CGPoint(x: crossClamped(hole.midX, half: halfW, in: viewportSize.width), y: hole.maxY + margin + halfH), minimumSize)
-        case "above":
-            return (CGPoint(x: crossClamped(hole.midX, half: halfW, in: viewportSize.width), y: hole.minY - margin - halfH), minimumSize)
-        case "right":
-            return (CGPoint(x: hole.maxX + margin + halfW, y: crossClamped(hole.midY, half: halfH, in: viewportSize.height)), minimumSize)
-        default:
-            return (CGPoint(x: hole.minX - margin - halfW, y: crossClamped(hole.midY, half: halfH, in: viewportSize.height)), minimumSize)
-        }
+        // Not even the minimum fits fully on screen on any side - genuinely reachable in this app, not just
+        // a hypothetical: max zoom is 2.5x and a note's own maximum size is 390x320 in canvas space, i.e. up
+        // to 975x800 on screen, comfortably bigger than a plain iPad viewport (Codex major, 5D round 5). The
+        // previous fallback placed the card just outside the hole regardless of the viewport's own bounds,
+        // which could push the input field and its 完了 button off screen entirely - with live-editing's own
+        // zoom lock, there would then be no way to zoom out and reach them, stranding the edit with no way
+        // back to the inspector. Anchored instead to a FIXED spot near the bottom of the viewport - always
+        // reachable, at the cost of this one genuinely-cramped case no longer guaranteeing the card avoids
+        // the hole (Codex's own suggested trade-off: reserve a dedicated input area rather than leave the
+        // card unreachable).
+        let anchoredSize = CGSize(
+            width: min(minimumSize.width, max(0, viewportSize.width - 2 * margin)),
+            height: min(minimumSize.height, max(0, viewportSize.height - 2 * margin))
+        )
+        return (CGPoint(x: viewportSize.width / 2, y: viewportSize.height - margin - anchoredSize.height / 2), anchoredSize)
     }
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
