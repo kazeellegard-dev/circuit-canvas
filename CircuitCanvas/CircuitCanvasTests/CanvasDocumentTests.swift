@@ -151,3 +151,39 @@ import Testing
         #expect(summary.size == CGSize(width: 600, height: 400))
     }
 }
+
+@MainActor struct SaveContinuationTests {
+    enum Action: Equatable { case new, open }
+
+    @Test func runsOnlyAfterItsOwnSaveSucceedsAndOnlyOnce() {
+        var continuation = SaveContinuation<Action>()
+        continuation.saveStarted(continuingWith: .new)
+        #expect(continuation.saveFinished(succeeded: true) == .new)
+        #expect(continuation.saveFinished(succeeded: true) == nil, "carried out once only")
+    }
+
+    @Test func aFailedSaveDropsIt() {
+        var continuation = SaveContinuation<Action>()
+        continuation.saveStarted(continuingWith: .new)
+        #expect(continuation.saveFinished(succeeded: false) == nil)
+        #expect(continuation.saveFinished(succeeded: true) == nil, "a later save must not revive it")
+    }
+
+    /// Codex round 2: 新規 → 保存… → cancel the panel → 開く → 保存しないで続ける → a later save must not
+    /// suddenly start a blank diagram.
+    @Test func aCancelledPanelFollowedByAnotherDocumentSwitchDropsIt() {
+        var continuation = SaveContinuation<Action>()
+        continuation.saveStarted(continuingWith: .new)
+        // (cancelled: no completion arrives)
+        continuation.documentReplacementRequested()
+        #expect(continuation.pending == nil)
+        #expect(continuation.saveFinished(succeeded: true) == nil)
+    }
+
+    @Test func anyOtherSaveDropsIt() {
+        var continuation = SaveContinuation<Action>()
+        continuation.saveStarted(continuingWith: .open)
+        continuation.otherSaveStarted()
+        #expect(continuation.saveFinished(succeeded: true) == nil)
+    }
+}

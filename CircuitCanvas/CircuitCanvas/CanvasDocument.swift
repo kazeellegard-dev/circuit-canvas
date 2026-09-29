@@ -142,6 +142,23 @@ struct CanvasFileDocument: FileDocument {
     }
 }
 
+/// A 新規/開く that is waiting for the save panel the user chose (「保存…」 in the unsaved-changes alert) to
+/// finish. Carried out only when that one save succeeds. A failed save, any other save, and any document
+/// switch drop it, so it can never fire later from an unrelated save. (FileDocument's save panel reports no
+/// cancellation on this OS version: a cancelled one simply leaves it pending until one of those drops it,
+/// and nothing but a Save As completion ever consumes it.)
+struct SaveContinuation<Action> {
+    private(set) var pending: Action?
+    mutating func saveStarted(continuingWith action: Action) { pending = action }
+    mutating func otherSaveStarted() { pending = nil }
+    mutating func documentReplacementRequested() { pending = nil }
+    /// The action to carry out now, if any; either way nothing is left pending.
+    mutating func saveFinished(succeeded: Bool) -> Action? {
+        defer { pending = nil }
+        return succeeded ? pending : nil
+    }
+}
+
 /// File commands for the menu bar (iPad with a keyboard, Mac): the focused canvas window publishes these.
 struct DocumentCommandActions {
     var new: () -> Void

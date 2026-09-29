@@ -198,11 +198,9 @@ struct ContentView: View {
     @State private var showExport = false
     @State private var showFileConflict = false
     @State private var pendingReplacement: DocumentReplacement?
-    /// 「保存…」 chosen in the unsaved-changes alert: carried out once that save succeeds, dropped if it fails
-    /// (leaving the current diagram as it is). A cancelled save panel reports nothing on this OS version's
-    /// FileDocument exporter, so every other way of starting a save clears it too - a later, unrelated save
-    /// can never carry out a replacement the user had abandoned.
-    @State private var replacementAfterSave: DocumentReplacement?
+    /// 「保存…」 chosen in the unsaved-changes alert for an untitled diagram: the 新規/開く waiting on that one
+    /// save panel (see SaveContinuation for when it is carried out or dropped).
+    @State private var replacementAfterSave = SaveContinuation<DocumentReplacement>()
     @State private var fileErrorMessage: String?
     // MARK: Onboarding coachmarks (3D)
     @AppStorage("onboardingDismissed") private var onboardingDismissed = false
@@ -283,9 +281,9 @@ struct ContentView: View {
                             .accessibilityIdentifier("file-new")
                         Button("開く…", systemImage: "folder") { requestReplacingDocument(.pick) }
                             .accessibilityIdentifier("file-open")
-                        Button("保存", systemImage: "square.and.arrow.down") { replacementAfterSave = nil; saveDocument() }
+                        Button("保存", systemImage: "square.and.arrow.down") { replacementAfterSave.otherSaveStarted(); saveDocument() }
                             .accessibilityIdentifier("file-save")
-                        Button("別名で保存…", systemImage: "square.and.arrow.down.on.square") { replacementAfterSave = nil; showSaveAs = true }
+                        Button("別名で保存…", systemImage: "square.and.arrow.down.on.square") { replacementAfterSave.otherSaveStarted(); showSaveAs = true }
                             .accessibilityIdentifier("file-save-as")
                         Divider()
                         Button("書き出す（PDF・PNG）…", systemImage: "square.and.arrow.up") { showExport = true }
@@ -1317,13 +1315,14 @@ struct ContentView: View {
     }
     private var documentCommands: DocumentCommandActions {
         DocumentCommandActions(new: { requestReplacingDocument(.new) }, open: { requestReplacingDocument(.pick) },
-                               save: { replacementAfterSave = nil; saveDocument() }, saveAs: { replacementAfterSave = nil; showSaveAs = true },
+                               save: { replacementAfterSave.otherSaveStarted(); saveDocument() }, saveAs: { replacementAfterSave.otherSaveStarted(); showSaveAs = true },
                                export: { showExport = true })
     }
     /// 新規 / 開く replace the whole diagram. A file-backed diagram is saved first (it autosaves anyway);
     /// an untitled one with content asks before its content is thrown away.
     private func requestReplacingDocument(_ action: DocumentReplacement) {
         guard !toolbarDisabled else { return }
+        replacementAfterSave.documentReplacementRequested()
         // Compared with the view position included (unlike hasUnsavedChanges): a pan or zoom still waiting
         // for its autosave is written too, rather than cancelled by the replacement.
         if documentURL != nil, !autosavePaused, currentDocument != documentBaseline {
@@ -1333,6 +1332,7 @@ struct ContentView: View {
         if hasUnsavedChanges { pendingReplacement = action } else { performReplacement(action) }
     }
     private func performReplacement(_ action: DocumentReplacement) {
+        replacementAfterSave.documentReplacementRequested()
         switch action {
         case .new: startNewDocument()
         case .pick: showOpen = true
@@ -1379,26 +1379,33 @@ struct ContentView: View {
     }
     /// Writes the current file, unless someone else changed it since this app last read or wrote it (another
     /// device via iCloud Drive, another app): then nothing is overwritten until the user picks what to do.
-    private func writeCurrentFile(force: Bool) {
-        guard let url = documentURL else { return }
+    /// Returns whether the file now holds the current diagram.
+    @discardableResult private func writeCurrentFile(force: Bool) -> Bool {
+        guard let url = documentURL else { return false }
         autosaveTask?.cancel()
         let document = currentDocument
         do {
             documentModificationDate = try document.write(to: url, unlessModifiedSince: force ? nil : documentModificationDate)
             documentBaseline = document
             autosavePaused = false
-            continueAfterSave()
+            return true
         } catch CanvasDocument.WriteError.modifiedElsewhere {
-            autosavePaused = true; replacementAfterSave = nil; showFileConflict = true
+            autosavePaused = true; showFileConflict = true
         } catch {
-            autosavePaused = true; replacementAfterSave = nil
+            autosavePaused = true
             fileErrorMessage = "「\(url.lastPathComponent)」に保存できませんでした。自動保存を止めています。\n\(error.localizedDescription)"
         }
+        return false
     }
-    private func continueAfterSave() {
-        guard let action = replacementAfterSave else { return }
-        replacementAfterSave = nil
-        performReplacement(action)
+    /// The unsaved-changes alert's 「保存…」: the replacement goes ahead only if this very save succeeds. A
+    /// file-backed diagram is written right here; an untitled one hands the replacement to its save panel.
+    private func saveThenReplace(_ action: DocumentReplacement) {
+        if documentURL != nil {
+            if writeCurrentFile(force: false) { performReplacement(action) }
+        } else {
+            replacementAfterSave.saveStarted(continuingWith: action)
+            showSaveAs = true
+        }
     }
     /// A file-backed diagram saves itself shortly after each change (also scrolling/zooming, so the view
     /// position comes back when it is reopened). Untitled ones are not written anywhere until saved.
@@ -1416,13 +1423,13 @@ struct ContentView: View {
         case .success(let url):
             documentURL = url; documentBaseline = document; autosavePaused = false
             documentModificationDate = try? FileAccess.coordinated(url, writing: false) { FileAccess.modificationDate(ofCoordinated: $0) }
-            if replacementAfterSave != nil {
-                continueAfterSave()
+            if let action = replacementAfterSave.saveFinished(succeeded: true) {
+                performReplacement(action)
             } else if currentDocument != document {
                 scheduleAutosave()   // anything changed while the save panel was up is written right away
             }
         case .failure(let error):
-            replacementAfterSave = nil
+            _ = replacementAfterSave.saveFinished(succeeded: false)
             fileErrorMessage = "保存できませんでした。\n\(error.localizedDescription)"
         }
     }
@@ -1459,7 +1466,9 @@ struct ContentView: View {
                     if let action = pendingReplacement { autosavePaused = false; performReplacement(action) }
                     pendingReplacement = nil
                 }
-                Button("保存…") { replacementAfterSave = pendingReplacement; pendingReplacement = nil; saveDocument() }
+                Button("保存…") {
+                    if let action = pendingReplacement { pendingReplacement = nil; saveThenReplace(action) }
+                }
                 Button("キャンセル", role: .cancel) { pendingReplacement = nil }
             } message: {
                 Text("今のキャンバスの内容は保存されていません。保存しないで続けると、失われます。")
@@ -1467,7 +1476,7 @@ struct ContentView: View {
             .alert("ファイルがほかで変更されています", isPresented: $showFileConflict) {
                 Button("ファイルから読み込み直す", role: .destructive) { if let documentURL { openDocument(at: documentURL) } }
                 Button("上書きして保存") { writeCurrentFile(force: true) }
-                Button("別名で保存…") { replacementAfterSave = nil; showSaveAs = true }
+                Button("別名で保存…") { replacementAfterSave.otherSaveStarted(); showSaveAs = true }
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("ほかの端末やアプリで、このファイルが変更されました。上書きしないように、自動保存を止めています。")
