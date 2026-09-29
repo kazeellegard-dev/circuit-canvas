@@ -3020,11 +3020,12 @@ final class CircuitCanvasUITests: XCTestCase {
         for frame in expected {
             XCTAssertTrue(target.insetBy(dx: -2, dy: -2).contains(frame), "step \(step): highlight \(target) must cover \(frame)", file: file, line: line)
         }
-        // ...and no more than that (plus the overlay's own 6pt padding and a little slack), so highlighting,
+        // ...and no more than that (plus the overlay's own 6pt padding and some slack - a container's
+        // accessibility frame hugs its content, e.g. the 132pt library panel reports 118.5pt), so highlighting,
         // say, the whole screen by mistake cannot pass too.
         let union = expected.reduce(CGRect.null) { $0.union($1) }
-        XCTAssertLessThanOrEqual(target.width, union.width + 24, "step \(step): highlight \(target) is wider than its target \(union)", file: file, line: line)
-        XCTAssertLessThanOrEqual(target.height, union.height + 24, "step \(step): highlight \(target) is taller than its target \(union)", file: file, line: line)
+        XCTAssertLessThanOrEqual(target.width, union.width + 40, "step \(step): highlight \(target) is wider than its target \(union)", file: file, line: line)
+        XCTAssertLessThanOrEqual(target.height, union.height + 40, "step \(step): highlight \(target) is taller than its target \(union)", file: file, line: line)
         XCTAssertTrue(bubble.minX < target.maxX && bubble.maxX > target.minX, "step \(step): bubble \(bubble) must overlap target \(target) horizontally", file: file, line: line)
         let gap = min(abs(bubble.minY - target.maxY), abs(target.minY - bubble.maxY))
         XCTAssertTrue(gap <= 20 || target.contains(bubble), "step \(step): bubble \(bubble) must be next to target \(target)", file: file, line: line)
