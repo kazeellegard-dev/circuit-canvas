@@ -42,6 +42,16 @@ private enum EditDeleteTarget: Identifiable {
 private enum LiveEditTarget: Equatable {
     case symbolTitle(UUID), noteTitle(UUID), noteBody(UUID), textBody(UUID)
 }
+/// Reports the live-edit target's own real, currently-laid-out on-screen frame (in the "editorViewport"
+/// coordinate space) - used, rather than a fixed guess, to size the scrim's hole and place the input card
+/// (Codex major, 5D round 2: a non-block symbol's label renders outside its body rect via `.overlay`, and a
+/// text item's content has no fixed size at all - neither can be approximated reliably).
+private struct LiveEditFrameKey: PreferenceKey {
+    static var defaultValue: CGRect?
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
+    }
+}
 private enum NoteType: String, CaseIterable, Identifiable {
     case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
     var id: Self { self }
@@ -168,6 +178,10 @@ struct ContentView: View {
     @State private var editMode = false
     @State private var pendingDelete: EditDeleteTarget?
     @State private var liveEdit: LiveEditTarget?
+    /// The current live-edit target's measured real frame, via LiveEditFrameKey - nil until the first layout
+    /// pass reports it (or if the target does not need measuring - a block symbol's title, and a note's
+    /// title/body, all have exactly known bounds already and never populate this).
+    @State private var liveEditMeasuredFrame: CGRect?
     @State private var undoStack: [CanvasSnapshot] = []
     @State private var redoStack: [CanvasSnapshot] = []
     @State private var undoRedoUnavailableReason: String?
@@ -454,14 +468,26 @@ struct ContentView: View {
                 // sits just below (or, if that would run off-screen, above) that hole, never on top of it.
                 if let target = liveEdit, let binding = liveEditBinding(for: target) {
                     let hole = liveEditTargetRect(for: target, viewportSize: proxy.size)
+                    let placement = liveEditCardPlacement(near: hole, preferredSize: liveEditCardSize(target), viewportSize: proxy.size)
                     ScrimWithHole(hole: hole)
                         .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .contentShape(ScrimWithHole(hole: hole), eoFill: true)
                         .onTapGesture {}
                         .accessibilityIdentifier("live-edit-scrim")
-                    liveEditCard(text: binding, multiline: liveEditIsMultiline(target))
-                        .position(liveEditCardPosition(near: hole, cardSize: liveEditCardSize(target), viewportSize: proxy.size))
+                    // Hidden exposure of the computed hole and card rects (Codex round 2 fix verification) -
+                    // lets a UI test confirm the hole actually grew to include a non-block symbol's label or
+                    // a long text body, and that the card never overlaps it, without screenshot comparison.
+                    Text("hole").font(.system(size:1)).opacity(0.01)
+                        .accessibilityIdentifier("live-edit-hole")
+                        .accessibilityValue("\(Int(hole.minX)),\(Int(hole.minY)),\(Int(hole.width)),\(Int(hole.height))")
+                        .allowsHitTesting(false)
+                    Text("card").font(.system(size:1)).opacity(0.01)
+                        .accessibilityIdentifier("live-edit-card-rect")
+                        .accessibilityValue("\(Int(placement.position.x - placement.size.width/2)),\(Int(placement.position.y - placement.size.height/2)),\(Int(placement.size.width)),\(Int(placement.size.height))")
+                        .allowsHitTesting(false)
+                    liveEditCard(text: binding, multiline: liveEditIsMultiline(target), size: placement.size)
+                        .position(placement.position)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -620,7 +646,8 @@ struct ContentView: View {
                         selectPin: { index in
                             guard tool == .wire, !editMode, liveEdit == nil else { return }
                             selectWirePin(pins(for: symbol)[index])
-                        }
+                        },
+                        measuresLiveEditFrame: liveEdit == .symbolTitle(symbol.id)
                     )
                         .position(symbol.position)
                         .onTapGesture {
@@ -833,6 +860,13 @@ struct ContentView: View {
                         },
                         delete: { pendingDelete = .text(text.id) }
                     )
+                        // Measures the card's own real, content-sized layout (Codex major, 5D round 2: the
+                        // fixed 220x80 hole approximation didn't track long or multi-line text). Emitting nil
+                        // for every text item except the one currently live-edited is harmless - see label's
+                        // matching comment in SymbolCard.
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: LiveEditFrameKey.self, value: liveEdit == .textBody(text.id) ? proxy.frame(in: .named("editorViewport")) : nil)
+                        })
                         .position(text.position)
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
@@ -845,19 +879,27 @@ struct ContentView: View {
                 }
 
             }
+            .onPreferenceChange(LiveEditFrameKey.self) { liveEditMeasuredFrame = $0 }
     }
-    private func liveEditCard(text: Binding<String>, multiline: Bool) -> some View {
-        VStack(spacing: 8) {
+    /// `size` is the card's outer footprint, exactly as liveEditCardPlacement computed it (shrunk from the
+    /// preferred size when space was tight) - the field itself is sized to fit inside that, so the card
+    /// never renders larger than the space that was confirmed not to overlap the target's hole (Codex
+    /// major, 5D round 2).
+    private func liveEditCard(text: Binding<String>, multiline: Bool, size: CGSize) -> some View {
+        let outerPadding: CGFloat = 24
+        let fieldWidth = max(80, size.width - outerPadding)
+        return VStack(spacing: 8) {
             if multiline {
+                let doneRowHeight: CGFloat = 44
                 TextEditor(text: text)
-                    .frame(width: 260, height: 140)
+                    .frame(width: fieldWidth, height: max(60, size.height - outerPadding - doneRowHeight))
                     .padding(4)
                     .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 6))
                     .accessibilityIdentifier("live-edit-field")
             } else {
                 TextField("", text: text)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
+                    .frame(width: fieldWidth)
                     .accessibilityIdentifier("live-edit-field")
                     .onSubmit { commitLiveEdit() }
             }
@@ -990,11 +1032,13 @@ struct ContentView: View {
     /// action last touched inspectorSessionPushed (a picker change, "確認" opening the sheet, etc.), exactly
     /// as before this feature existed.
     private func beginLiveEdit(_ target: LiveEditTarget) {
+        liveEditMeasuredFrame = nil
         liveEdit = target
         showInspector = false
     }
     private func commitLiveEdit() {
         liveEdit = nil
+        liveEditMeasuredFrame = nil
         showInspector = true
     }
     /// The exact same bindings the inspector itself used to bind its now-removed TextField/TextEditor to -
@@ -1026,12 +1070,21 @@ struct ContentView: View {
         switch target {
         case .symbolTitle(let id):
             guard let symbol = symbols.first(where: { $0.id == id }) else { return fallback }
-            return toViewport(symbol.kind.body(at: symbol.position, rotation: symbol.rotation, size: symbol.size))
+            let bodyRect = toViewport(symbol.kind.body(at: symbol.position, rotation: symbol.rotation, size: symbol.size))
+            // Block symbols draw their title inside bodyRect already; only a non-block symbol's label - drawn
+            // outside bodyRect via SymbolCard's .overlay - needs the real measured frame unioned in (Codex
+            // major, 5D round 2). liveEditMeasuredFrame is nil for one render right after beginLiveEdit,
+            // before the first onPreferenceChange arrives - bodyRect alone is still a reasonable hole then.
+            guard !symbol.kind.isBlock, let measured = liveEditMeasuredFrame else { return bodyRect }
+            return bodyRect.union(measured)
         case .noteTitle(let id), .noteBody(let id):
             guard let note = notes.first(where: { $0.id == id }) else { return fallback }
             return toViewport(CGRect(x: note.position.x - note.size.width/2, y: note.position.y - note.size.height/2, width: note.size.width, height: note.size.height))
         case .textBody(let id):
             guard let text = texts.first(where: { $0.id == id }) else { return fallback }
+            // Same first-render caveat as above: fall back to the fixed approximation until the real,
+            // content-sized frame (which TextCard's layout has no upper bound on) has been measured once.
+            if let measured = liveEditMeasuredFrame { return measured }
             let approximateSize = CGSize(width: 220, height: 80)
             return toViewport(CGRect(x: text.position.x - approximateSize.width/2, y: text.position.y - approximateSize.height/2, width: approximateSize.width, height: approximateSize.height))
         }
@@ -1042,17 +1095,60 @@ struct ContentView: View {
     private func liveEditCardSize(_ target: LiveEditTarget) -> CGSize {
         liveEditIsMultiline(target) ? CGSize(width: 284, height: 220) : CGSize(width: 244, height: 110)
     }
-    /// Below the target's hole by default - above it instead when there is not enough room below - so the
-    /// input card and the target's own real, live-updating card are both visible at once, never overlapping
-    /// (Codex major, 5D round 1).
-    private func liveEditCardPosition(near hole: CGRect, cardSize: CGSize, viewportSize: CGSize) -> CGPoint {
+    /// Tries below, above, right, then left of the target's hole, in that order, picking the first spot
+    /// that both fits fully on screen and does not overlap the hole at the card's preferred size. If none
+    /// of the four do (Codex major, 5D round 2 - the old below-then-above-then-clamp fallback could still
+    /// land the clamped card on top of the hole when the viewport was too short for either), shrinks the
+    /// card into whichever side has the most room left, rather than ever clamping it back over the hole.
+    ///
+    /// Below/above only clamp the card's X (cross-axis) position, and right/left only clamp Y - clamping
+    /// the AXIS THE HOLE WAS AVOIDED ALONG is exactly what could reintroduce overlap before, since it can
+    /// push the card straight back toward (or past) the hole along that axis.
+    private func liveEditCardPlacement(near hole: CGRect, preferredSize: CGSize, viewportSize: CGSize) -> (position: CGPoint, size: CGSize) {
         let margin: CGFloat = 12
-        let halfW = cardSize.width / 2, halfH = cardSize.height / 2
-        var y = hole.maxY + margin + halfH
-        if y + halfH + margin > viewportSize.height { y = hole.minY - margin - halfH }
-        let x = min(max(hole.midX, halfW + margin), max(halfW + margin, viewportSize.width - halfW - margin))
-        let clampedY = min(max(y, halfH + margin), max(halfH + margin, viewportSize.height - halfH - margin))
-        return CGPoint(x: x, y: clampedY)
+        let minSpan: CGFloat = 60
+
+        func crossClamped(_ value: CGFloat, half: CGFloat, in total: CGFloat) -> CGFloat {
+            min(max(value, half + margin), max(half + margin, total - half - margin))
+        }
+        func vertical(size: CGSize, below: Bool) -> CGPoint? {
+            let halfH = size.height / 2
+            let y = below ? hole.maxY + margin + halfH : hole.minY - margin - halfH
+            guard y - halfH >= 0, y + halfH <= viewportSize.height else { return nil }
+            return CGPoint(x: crossClamped(hole.midX, half: size.width / 2, in: viewportSize.width), y: y)
+        }
+        func horizontal(size: CGSize, right: Bool) -> CGPoint? {
+            let halfW = size.width / 2
+            let x = right ? hole.maxX + margin + halfW : hole.minX - margin - halfW
+            guard x - halfW >= 0, x + halfW <= viewportSize.width else { return nil }
+            return CGPoint(x: x, y: crossClamped(hole.midY, half: size.height / 2, in: viewportSize.height))
+        }
+
+        if let p = vertical(size: preferredSize, below: true) { return (p, preferredSize) }
+        if let p = vertical(size: preferredSize, below: false) { return (p, preferredSize) }
+        if let p = horizontal(size: preferredSize, right: true) { return (p, preferredSize) }
+        if let p = horizontal(size: preferredSize, right: false) { return (p, preferredSize) }
+
+        let belowAvail = viewportSize.height - hole.maxY - 2 * margin
+        let aboveAvail = hole.minY - 2 * margin
+        let rightAvail = viewportSize.width - hole.maxX - 2 * margin
+        let leftAvail = hole.minX - 2 * margin
+        let bySide = ["below": belowAvail, "above": aboveAvail, "right": rightAvail, "left": leftAvail]
+        let side = bySide.max { $0.value < $1.value }!.key
+        switch side {
+        case "below":
+            let size = CGSize(width: preferredSize.width, height: max(minSpan, belowAvail))
+            return (vertical(size: size, below: true) ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height - size.height / 2 - margin), size)
+        case "above":
+            let size = CGSize(width: preferredSize.width, height: max(minSpan, aboveAvail))
+            return (vertical(size: size, below: false) ?? CGPoint(x: viewportSize.width / 2, y: size.height / 2 + margin), size)
+        case "right":
+            let size = CGSize(width: max(minSpan, rightAvail), height: preferredSize.height)
+            return (horizontal(size: size, right: true) ?? CGPoint(x: viewportSize.width - size.width / 2 - margin, y: viewportSize.height / 2), size)
+        default:
+            let size = CGSize(width: max(minSpan, leftAvail), height: preferredSize.height)
+            return (horizontal(size: size, right: false) ?? CGPoint(x: size.width / 2 + margin, y: viewportSize.height / 2), size)
+        }
     }
     private func selectWirePin(_ pin: CGPoint) {
         if let start = pendingWireStart {
@@ -1474,6 +1570,9 @@ private struct SymbolCard: View {
     let wireStartPinIndex: Int?
     let select: () -> Void
     let selectPin: (Int) -> Void
+    /// True only for the one symbol currently live-edited by name (5D round 2): makes `label` report its
+    /// own real on-screen frame via LiveEditFrameKey, since the label paints outside `bounds` (see `label`).
+    var measuresLiveEditFrame: Bool = false
     private var bounds: CGRect { symbol.kind.body(at:.zero, rotation:symbol.rotation, size:symbol.size) }
     private var offsets: [CGPoint] { symbol.kind.pins(at:.zero, rotation:symbol.rotation, size:symbol.size, blockPins:symbol.blockPins) }
     /// Small symbols still get a finger-sized (44 pt) select / drag target.
@@ -1552,7 +1651,14 @@ private struct SymbolCard: View {
     /// Horizontal symbols: just below the body. Vertical symbols: to the right of it.
     /// Always upright, never part of the hit area. A zero-size frame anchors the text edge.
     @ViewBuilder private var label: some View {
+        // The background(GeometryReader) is attached directly to the fixedSize() text, so it measures the
+        // text's own real painted size, not the zero-height/width frame applied further below that would
+        // otherwise be reported instead (Codex major, 5D round 2). Emitting nil when not the live-edited
+        // symbol is harmless: LiveEditFrameKey.reduce ignores nil and keeps the latest real measurement.
         let text = Text(symbol.title).font(.system(size:10)).fixedSize()
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: LiveEditFrameKey.self, value: measuresLiveEditFrame ? proxy.frame(in: .named("editorViewport")) : nil)
+            })
         // Pins sitting on the edge the label hangs from (transistors, relays…) need extra room.
         let below = offsets.contains { abs($0.y - bounds.maxY) < 1 } ? 10 : 0
         let right = offsets.contains { abs($0.x - bounds.maxX) < 1 } ? 10 : 0

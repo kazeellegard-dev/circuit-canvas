@@ -1084,6 +1084,86 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["undo-button"].isEnabled,"undo must work again once live-editing ends")
     }
 
+    // MARK: - Live-edit hole/card geometry (5D round 2)
+
+    @MainActor
+    func testLiveEditingARotatedNonBlockSymbolNameHoleIncludesItsLabel() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app, category:"受動部品", name:"抵抗", x:380, y:530)
+        element(app,"symbol-抵抗").tap()
+        // Rotate once (0° -> 90°): SymbolCard.label moves from below the body to its right - a case the
+        // fixed body-only hole missed entirely before this fix (Codex major, 5D round 2).
+        app.buttons["symbol-抵抗-rotate"].tap()
+        let cardFrame = element(app,"symbol-抵抗").frame
+        app.buttons["確認"].tap()
+        XCTAssertTrue(app.buttons["inspector-symbol-title"].waitForExistence(timeout:2))
+        app.buttons["inspector-symbol-title"].tap()
+        XCTAssertTrue(app.textFields["live-edit-field"].waitForExistence(timeout:2))
+        let hole = parseRect(element(app,"live-edit-hole").value as? String ?? "")
+        // The label is drawn outside the symbol's own hit-test frame (cardFrame); the hole must have grown
+        // to include it rather than staying pinned to cardFrame's own width.
+        XCTAssertGreaterThan(hole.width, cardFrame.width, "the hole must widen to include the rotated label, not just the symbol's own body")
+        app.buttons["live-edit-done"].tap()
+    }
+
+    @MainActor
+    func testLiveEditingATextItemHoleGrowsWithLongerContent() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
+        XCTAssertTrue(element(app,"text-テキスト").waitForExistence(timeout:2))
+        element(app,"text-テキスト").tap()
+        app.buttons["確認"].tap()
+        app.buttons["text-body-editor"].tap()
+        let field = app.textViews["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+        let holeBefore = parseRect(element(app,"live-edit-hole").value as? String ?? "")
+
+        field.tap(); field.tap()
+        field.typeText("とても長い本文をここに追記してテスト用に十分な幅と高さを要求します")
+        let holeAfter = parseRect(element(app,"live-edit-hole").value as? String ?? "")
+        // The old fixed 220x80 approximation never changed no matter what was typed; the real, measured
+        // frame must grow with the content (Codex major, 5D round 2).
+        XCTAssertTrue(holeAfter.width > holeBefore.width || holeAfter.height > holeBefore.height,
+                      "a longer text body must grow the hole beyond the fixed approximation")
+        app.buttons["live-edit-done"].tap()
+    }
+
+    @MainActor
+    func testLiveEditInputCardNeverOverlapsATallExpandedNoteWhileEditingItsBody() throws {
+        let app = XCUIApplication(); app.launch()
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+        note.tap()
+        app.buttons["確認"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        // Grow the note toward its maximum height (320pt) - a hole this tall is what produced Codex's
+        // concrete counterexample where neither below nor above had room and the old fallback clamped the
+        // card straight onto the hole (Codex major, 5D round 2).
+        let handle = element(app,"experiment-note-R12を変更-resize-br")
+        XCTAssertTrue(handle.waitForExistence(timeout:2))
+        let handleStart = handle.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handleStart.press(forDuration:0.05,thenDragTo:handleStart.withOffset(CGVector(dx:100,dy:400)))
+
+        note.tap()
+        app.buttons["確認"].tap()
+        app.buttons["note-body-editor"].tap()
+        XCTAssertTrue(app.textViews["live-edit-field"].waitForExistence(timeout:2))
+        let hole = parseRect(element(app,"live-edit-hole").value as? String ?? "")
+        let card = parseRect(element(app,"live-edit-card-rect").value as? String ?? "")
+        XCTAssertFalse(hole.intersects(card), "the input card must never overlap the item being edited, even when it has grown tall")
+        app.buttons["live-edit-done"].tap()
+    }
+
+    /// Parses the "x,y,w,h" accessibility values this feature exposes for its hole/card rects back into a
+    /// CGRect, so a test can compare or intersect them directly instead of eyeballing the raw string.
+    private func parseRect(_ value: String) -> CGRect {
+        let parts = value.split(separator:",").compactMap { Double($0) }
+        guard parts.count == 4 else { return .zero }
+        return CGRect(x:parts[0], y:parts[1], width:parts[2], height:parts[3])
+    }
+
     @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
