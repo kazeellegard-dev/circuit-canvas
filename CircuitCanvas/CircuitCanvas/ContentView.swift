@@ -30,11 +30,22 @@ private enum NoteSize {
         ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
     }
 }
-private enum Tool { case select, symbol, note, text, wire, pan }
+private enum Tool { case select, symbol, note, text, wire, pan, group }
 /// What the ✗ badge (edit mode, 4C) is about to delete, pending its confirmation alert.
 private enum EditDeleteTarget: Identifiable {
+    case symbol(UUID), note(UUID), text(UUID), group(UUID)
+    var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)"; case .text(let id): "text-\(id)"; case .group(let id): "group-\(id)" } }
+}
+/// One member of a group (5E) - a group can freely mix symbols, notes, and texts.
+private enum GroupMember: Hashable {
     case symbol(UUID), note(UUID), text(UUID)
-    var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)"; case .text(let id): "text-\(id)" } }
+}
+/// A flat collection of symbols/notes/texts that move, get selected, and get deleted together. Never
+/// nested, per this task's own scope - grouping a selection that touches an existing group's members
+/// widens that same group instead of creating a group-of-groups (see createOrMergeGroup).
+private struct GroupItem: Identifiable {
+    let id = UUID()
+    var members: Set<GroupMember>
 }
 /// Which inspector text field (5D) is being edited live, on the canvas, with every other element dimmed and
 /// unreachable. Only text-entry fields (name/title/body) - the picker fields (種別・アイコン) are unaffected,
@@ -145,7 +156,7 @@ private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var
 /// One Undo/Redo step (4D): the whole diagram's content, from just before one meaningful operation. Simpler
 /// and safer than hooking every mutation individually into SwiftUI's UndoManager, at the cost of copying
 /// three arrays per step - trivial at this diagram's scale, and capped (maxUndoSteps) regardless.
-private struct CanvasSnapshot { var symbols: [SymbolItem]; var notes: [NoteItem]; var texts: [TextItem]; var wires: [WireItem] }
+private struct CanvasSnapshot { var symbols: [SymbolItem]; var notes: [NoteItem]; var texts: [TextItem]; var wires: [WireItem]; var groups: [GroupItem] }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -155,6 +166,7 @@ struct ContentView: View {
     @State private var selectedSymbol: UUID?
     @State private var selectedNote: UUID?
     @State private var selectedText: UUID?
+    @State private var selectedGroup: UUID?
     @State private var linkingNote: UUID?   // relate button pressed: waiting for a corner tap on this note
     @State private var pendingRelateFrom: (id: UUID, corner: NoteCorner)?   // corner tapped: waiting for the target tap
     @State private var pendingWireStart: CGPoint?
@@ -202,6 +214,17 @@ struct ContentView: View {
     @State private var canvasDescription = ""
     @State private var editMode = false
     @State private var pendingDelete: EditDeleteTarget?
+    // MARK: Grouping (5E)
+    /// The canvas-space rectangle currently being dragged out in group-selection mode; nil when not dragging.
+    @State private var groupSelectionRect: CGRect?
+    /// Symbols/notes/texts the in-progress marquee currently overlaps - highlighted live, per this task's
+    /// "一部でも重なった...強調色になる" requirement, before the drag ends and asks to confirm.
+    @State private var groupSelectionCandidates: Set<GroupMember> = []
+    /// Set when a marquee drag ends over at least one item, driving the "グループ化しますか？" confirmation.
+    @State private var pendingGroupConfirm: Set<GroupMember>?
+    /// Which group a drag on one of its members is currently moving - gates a single pushUndo per drag
+    /// gesture, mirroring dragOrigins/noteDragOrigins/textDragOrigins' own per-item gating (see moveGroup).
+    @State private var groupDragActive: UUID?
     @State private var liveEdit: LiveEditTarget?
     /// The current live-edit target's measured real frame, via LiveEditFrameKey - nil until the first layout
     /// pass reports it (or if the target does not need measuring - a block symbol's title, and a note's
@@ -226,6 +249,7 @@ struct ContentView: View {
     ]
     @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
     @State private var texts: [TextItem] = []
+    @State private var groups: [GroupItem] = []
     @State private var wires: [WireItem] = [
         .init(start: .init(x: 165, y: 160), end: .init(x: 325, y: 250)),
         .init(start: .init(x: 415, y: 250), end: .init(x: 575, y: 250)),
@@ -274,7 +298,7 @@ struct ContentView: View {
                     .accessibilityIdentifier("redo-button")
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(toolbarDisabled)
-                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil }
+                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil }
                         .disabled(toolbarDisabled)
                     // Jumps the library to whichever category the selected symbol is in, so it is visible
                     // (and its highlight legible) instead of leaving whatever tab happened to be open before.
@@ -286,11 +310,20 @@ struct ContentView: View {
                     // does nothing (see canvasPanGesture) - too easy to nudge the canvas by accident while
                     // trying to grab a wire lead. Two fingers can always pan regardless of tool (below).
                     Button(tool == .pan ? "キャンバス移動中" : "キャンバス移動", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
-                        tool = .pan; selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+                        tool = .pan; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(tool == .pan ? .accentColor : nil)
                     .disabled(toolbarDisabled)
                     .accessibilityIdentifier("pan-mode-toggle")
+                    // Group-selection mode (5E): drag a marquee over the items to group; see
+                    // groupSelectionGesture (inside canvasPanGesture) and the "グループ化しますか？" alert.
+                    Button(tool == .group ? "グループ化選択中" : "グループ化", systemImage: "square.dashed") {
+                        tool = .group; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil
+                        linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+                    }
+                    .tint(tool == .group ? .accentColor : nil)
+                    .disabled(toolbarDisabled)
+                    .accessibilityIdentifier("group-mode-toggle")
                     // The edit-mode toggle sits just left of "確認", per feedback on the toolbar's reading
                     // order; its icon was changed from a trash can (which read oddly alongside the other
                     // plain, uncoloured toolbar glyphs) to an eraser, which is red only while active.
@@ -299,7 +332,7 @@ struct ContentView: View {
                         // Edit mode has its own, exclusive UI (the ✗ badges); leave no other mode's state
                         // dangling underneath it, in either direction.
                         tool = .select
-                        selectedSymbol = nil; selectedNote = nil; selectedText = nil
+                        selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil
                         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(editMode ? .red : nil)
@@ -324,9 +357,19 @@ struct ContentView: View {
                     case .symbol(let id): removeSymbol(id)
                     case .note(let id): removeNote(id)
                     case .text(let id): removeText(id)
+                    case .group(let id): removeGroup(id)
                     case .none: break
                     }
                     pendingDelete = nil
+                }
+            }
+            // 5E: the marquee's own confirmation, per this task's "グループ化しますか？"。
+            .alert("グループ化しますか？", isPresented: Binding(get: { pendingGroupConfirm != nil }, set: { if !$0 { pendingGroupConfirm = nil } })) {
+                Button("キャンセル", role: .cancel) { pendingGroupConfirm = nil }
+                Button("はい") {
+                    if let members = pendingGroupConfirm { createOrMergeGroup(with: members) }
+                    pendingGroupConfirm = nil
+                    tool = .select
                 }
             }
             .alert("できません", isPresented: Binding(get: { undoRedoUnavailableReason != nil }, set: { if !$0 { undoRedoUnavailableReason = nil } })) {
@@ -560,6 +603,7 @@ struct ContentView: View {
                     else if tool == .text { hint("textformat", "キャンバスをタップしてテキストを配置") }
                     else if tool == .wire { hint("point.3.connected.trianglepath.dotted", pendingWireStart == nil ? "始点のピンをタップ" : "終点のピンをタップ（直交で自動配線）") }
                     else if tool == .pan { hint("arrow.up.and.down.and.arrow.left.and.right", "ドラッグしてキャンバスを移動") }
+                    else if tool == .group { hint("square.dashed", "ドラッグしてグループ化する範囲を選択") }
                 }.padding(16).allowsHitTesting(false)
             }
             .overlay(alignment: .topTrailing) {
@@ -682,37 +726,52 @@ struct ContentView: View {
                     }
                 }
                 ForEach(symbols) { symbol in
+                    // Grouped (5E): tapping selects the whole group instead, and drags move it as a unit - a
+                    // grouped member has no individual selection, which is also what already keeps its resize
+                    // handles, rotate button, block-pin-add buttons, and inspector section from ever showing
+                    // (all gated on selectedSymbol, which a grouped member never sets).
+                    let groupOfSymbol = groupID(ofSymbol: symbol.id)
+                    let selectSymbol: () -> Void = {
+                        guard tool == .select, !editMode, liveEdit == nil else { return }
+                        if let gid = groupOfSymbol { selectedGroup = gid; selectedSymbol = nil; selectedNote = nil; selectedText = nil }
+                        else { selectedSymbol = symbol.id; selectedNote = nil; selectedText = nil; selectedGroup = nil }
+                    }
                     SymbolCard(
                         symbol: symbol,
                         isConnected: isConnected(symbol),
-                        selected: selectedSymbol == symbol.id,
+                        selected: selectedSymbol == symbol.id || groupSelectionCandidates.contains(.symbol(symbol.id)),
                         wireStartPinIndex: pendingWirePinIndex(for: symbol),
-                        select: {
-                            guard tool == .select, !editMode, liveEdit == nil else { return }
-                            selectedSymbol = symbol.id
-                            selectedNote = nil; selectedText = nil
-                        },
+                        select: selectSymbol,
                         selectPin: { index in
-                            guard tool == .wire, !editMode, liveEdit == nil else { return }
+                            // A grouped symbol's pins cannot be reconnected - "配線のつなぎ替え...ができない".
+                            guard tool == .wire, !editMode, liveEdit == nil, groupOfSymbol == nil else { return }
                             selectWirePin(pins(for: symbol)[index])
                         },
                         measuresLiveEditFrame: liveEdit == .symbolTitle(symbol.id)
                     )
                         .position(symbol.position)
-                        .onTapGesture {
-                            guard tool == .select, !editMode, liveEdit == nil else { return }
-                            selectedSymbol = symbol.id
-                            selectedNote = nil; selectedText = nil
-                        }
+                        .onTapGesture(perform: selectSymbol)
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode, liveEdit == nil else { return }
-                                    move(symbolID: symbol.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                    guard !editMode, liveEdit == nil, tool != .group else { return }
+                                    let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
+                                    if let gid = groupOfSymbol { moveGroup(gid, by: translation) }
+                                    else { move(symbolID: symbol.id, by: translation) }
                                 }
-                                .onEnded { _ in dragOrigins[symbol.id] = nil }
+                                .onEnded { _ in
+                                    if let gid = groupOfSymbol { endGroupDrag(gid) } else { dragOrigins[symbol.id] = nil }
+                                }
                         )
-                    if editMode {
+                    // Exposes which group (if any) this symbol belongs to, as an opaque id a test can compare
+                    // against another member's own value - mirrors -rotation/-size's existing hidden-field style.
+                    Text("group").font(.system(size:1)).opacity(0.01)
+                        .accessibilityIdentifier("symbol-\(symbol.title)-group")
+                        .accessibilityValue(groupOfSymbol?.uuidString ?? "")
+                        .allowsHitTesting(false)
+                    // "編集モードでは、グループ単位でのみ削除できる" - a grouped member gets no individual ✗;
+                    // see the group-level ✗ rendered alongside groups below.
+                    if editMode, groupOfSymbol == nil {
                         let bounds = symbol.kind.body(at:symbol.position,rotation:symbol.rotation,size:symbol.size)
                         let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
                         Button { pendingDelete = .symbol(symbol.id) } label: {
@@ -790,34 +849,45 @@ struct ContentView: View {
                     }
                 }
                 ForEach($notes) { $note in
+                    let groupOfNote = groupID(ofNote: note.id)
+                    let selectNote: () -> Void = {
+                        guard tool == .select, !editMode, liveEdit == nil else { return }
+                        if let gid = groupOfNote { selectedGroup = gid; selectedSymbol = nil; selectedNote = nil; selectedText = nil }
+                        else { selectedNote = note.id; selectedSymbol = nil; selectedText = nil; selectedGroup = nil }
+                    }
                     NoteCard(
                         note: $note,
-                        selected: selectedNote == note.id,
-                        select: {
-                            guard tool == .select, !editMode, liveEdit == nil else { return }
-                            selectedNote = note.id
-                            selectedSymbol = nil; selectedText = nil
-                        }
+                        selected: selectedNote == note.id || groupSelectionCandidates.contains(.note(note.id)),
+                        select: selectNote
                     )
                         .position(note.position)
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode, liveEdit == nil else { return }
-                                    move(noteID: note.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                    guard !editMode, liveEdit == nil, tool != .group else { return }
+                                    let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
+                                    if let gid = groupOfNote { moveGroup(gid, by: translation) }
+                                    else { move(noteID: note.id, by: translation) }
                                 }
-                                .onEnded { _ in noteDragOrigins[note.id] = nil }
+                                .onEnded { _ in
+                                    if let gid = groupOfNote { endGroupDrag(gid) } else { noteDragOrigins[note.id] = nil }
+                                }
                         )
                         .contextMenu {
                             // None of this while in edit mode: it would set selectedNote/linkingNote behind
                             // the back of the guard on NoteCard's own tap, showing the relate-corner picker
-                            // right alongside the ✗ badges (Codex minor, 4C round 1).
-                            if !editMode {
+                            // right alongside the ✗ badges (Codex minor, 4C round 1). A grouped note gets no
+                            // individual actions either - "個別編集...ができない" (5E).
+                            if !editMode, groupOfNote == nil {
                                 Button(note.complete ? "未完了に戻す" : "完了にする", systemImage: note.complete ? "arrow.uturn.backward" : "checkmark") { note.complete.toggle() }
                                 Button("関連付け", systemImage: "arrowshape.turn.up.right") { selectedNote = note.id; selectedSymbol = nil; selectedText = nil; linkingNote = note.id }
                             }
                         }
-                    if editMode {
+                    Text("group").font(.system(size:1)).opacity(0.01)
+                        .accessibilityIdentifier("experiment-note-\(note.title)-group")
+                        .accessibilityValue(groupOfNote?.uuidString ?? "")
+                        .allowsHitTesting(false)
+                    if editMode, groupOfNote == nil {
                         let bounds = CGRect(x:note.position.x-note.size.width/2,y:note.position.y-note.size.height/2,width:note.size.width,height:note.size.height)
                         let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
                         Button { pendingDelete = .note(note.id) } label: {
@@ -897,15 +967,18 @@ struct ContentView: View {
                     }
                 }
                 ForEach($texts) { $text in
+                    let groupOfText = groupID(ofText: text.id)
                     TextCard(
                         text: $text,
-                        selected: selectedText == text.id,
-                        editMode: editMode,
+                        selected: selectedText == text.id || groupSelectionCandidates.contains(.text(text.id)),
+                        // A grouped text gets no individual delete badge - "個別編集...ができない" (5E); see
+                        // the group-level ✗ rendered alongside groups below.
+                        editMode: editMode && groupOfText == nil,
                         scale: canvasScale,
                         select: {
                             guard tool == .select, !editMode, liveEdit == nil else { return }
-                            selectedText = text.id
-                            selectedSymbol = nil; selectedNote = nil
+                            if let gid = groupOfText { selectedGroup = gid; selectedSymbol = nil; selectedNote = nil; selectedText = nil }
+                            else { selectedText = text.id; selectedSymbol = nil; selectedNote = nil; selectedGroup = nil }
                         },
                         delete: { pendingDelete = .text(text.id) }
                     )
@@ -920,13 +993,71 @@ struct ContentView: View {
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
-                                    guard !editMode, liveEdit == nil else { return }
-                                    move(textID: text.id, by: CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale))
+                                    guard !editMode, liveEdit == nil, tool != .group else { return }
+                                    let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
+                                    if let gid = groupOfText { moveGroup(gid, by: translation) }
+                                    else { move(textID: text.id, by: translation) }
                                 }
-                                .onEnded { _ in textDragOrigins[text.id] = nil }
+                                .onEnded { _ in
+                                    if let gid = groupOfText { endGroupDrag(gid) } else { textDragOrigins[text.id] = nil }
+                                }
                         )
+                    Text("group").font(.system(size:1)).opacity(0.01)
+                        .accessibilityIdentifier("text-\(text.body)-group")
+                        .accessibilityValue(groupOfText?.uuidString ?? "")
+                        .allowsHitTesting(false)
                 }
-
+                // The marquee itself (5E), while a group-selection drag is in progress.
+                if let rect = groupSelectionRect {
+                    Rectangle()
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6,4]))
+                        .background(Rectangle().fill(Color.accentColor.opacity(0.08)))
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("group-selection-marquee")
+                }
+                // A selected group (5E) is highlighted as one whole range, with its own "グループ解除" button -
+                // never the individual per-member selection UI, which none of its members ever set.
+                if let gid = selectedGroup, let group = groups.first(where: { $0.id == gid }), let bounds = groupBounds(group) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor, lineWidth: 3)
+                        .frame(width: bounds.width + 16, height: bounds.height + 16)
+                        .position(x: bounds.midX, y: bounds.midY)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("group-highlight")
+                    let side = ResizableGeometry.screenConstant(32, scale: canvasScale)
+                    Button { ungroup(gid) } label: {
+                        Image(systemName: "xmark.square")
+                            .frame(width: side, height: side)
+                            .background(.regularMaterial, in: Circle())
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x: bounds.maxX + 8, y: bounds.minY - 8)
+                    .accessibilityLabel("グループ解除")
+                    .accessibilityIdentifier("group-ungroup")
+                }
+                // "編集モードでは、グループ単位でのみ削除できる" - one ✗ per group, deleting every member.
+                if editMode {
+                    ForEach(groups) { group in
+                        if let bounds = groupBounds(group) {
+                            let side = ResizableGeometry.screenConstant(28, scale: canvasScale)
+                            Button { pendingDelete = .group(group.id) } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: side*0.75))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .red)
+                                    .frame(width: side, height: side)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .position(x: bounds.maxX + 8, y: bounds.minY - 8)
+                            .accessibilityLabel("グループを削除")
+                            .accessibilityIdentifier("group-\(group.id)-edit-delete")
+                        }
+                    }
+                }
             }
             .onPreferenceChange(LiveEditFrameKey.self) { liveEditMeasuredFrame = $0 }
     }
@@ -972,14 +1103,14 @@ struct ContentView: View {
                 // than falling through to deselect and leaving linkingNote (and its hint) dangling (Codex
                 // minor, 4A round 1).
                 else if linkingNote != nil { linkingNote = nil }
-                else if editMode { selectedNote = nil; selectedSymbol = nil; selectedText = nil }
+                else if editMode { selectedNote = nil; selectedSymbol = nil; selectedText = nil; selectedGroup = nil }
                 else if tool == .wire, let pin = nearestPin(to: point) {
                     selectWirePin(pin)
                 }
-                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; tool = .select }
-                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); selectedSymbol = nil; selectedNote = nil; selectedText = nil; tool = .select; reroute() }
-                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; selectedSymbol = nil; selectedNote = nil; tool = .select }
-                else { selectedNote = nil; selectedSymbol = nil; selectedText = nil }
+                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; selectedGroup = nil; tool = .select }
+                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; tool = .select; reroute() }
+                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; selectedSymbol = nil; selectedNote = nil; selectedGroup = nil; tool = .select }
+                else { selectedNote = nil; selectedSymbol = nil; selectedText = nil; selectedGroup = nil }
             }
     }
 
@@ -1366,8 +1497,8 @@ struct ContentView: View {
     /// diagram back to blank, and any state that referred to what was on it.
     private func resetCanvas() {
         pushUndo()
-        symbols = []; notes = []; texts = []; wires = []
-        selectedSymbol = nil; selectedNote = nil; selectedText = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+        symbols = []; notes = []; texts = []; wires = []; groups = []
+        selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         tool = .select
         reroute()
         centerViewportOnCanvas()
@@ -1388,27 +1519,28 @@ struct ContentView: View {
     /// Call right before a meaningful, undoable change (see this task's list: add/move/resize/rotate/
     /// pin-add/delete/rename/type/icon). A drag pushes once, at its first onChanged, not on every delta.
     private func pushUndo() {
-        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires, groups: groups))
         if undoStack.count > maxUndoSteps { undoStack.removeFirst() }
         redoStack.removeAll()
     }
     private func performUndo() {
         guard let previous = undoStack.popLast() else { undoRedoUnavailableReason = "取り消す操作がありません"; return }
-        redoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
+        redoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires, groups: groups))
         restore(previous)
     }
     private func performRedo() {
         guard let next = redoStack.popLast() else { undoRedoUnavailableReason = "やり直す操作がありません"; return }
-        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires))
+        undoStack.append(CanvasSnapshot(symbols: symbols, notes: notes, texts: texts, wires: wires, groups: groups))
         restore(next)
     }
     /// Snapshots already hold each wire's exact prior `.points`, so this does not reroute() - replanning
     /// could legitimately land on a different route than the one actually being restored.
     private func restore(_ snapshot: CanvasSnapshot) {
-        symbols = snapshot.symbols; notes = snapshot.notes; texts = snapshot.texts; wires = snapshot.wires
-        selectedSymbol = nil; selectedNote = nil; selectedText = nil
+        symbols = snapshot.symbols; notes = snapshot.notes; texts = snapshot.texts; wires = snapshot.wires; groups = snapshot.groups
+        selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil
         linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
         dragOrigins = [:]; noteDragOrigins = [:]; textDragOrigins = [:]; resizeDrag = nil; noteResizeDrag = nil; segmentDrag = nil
+        groupDragActive = nil
     }
     /// One-finger drag on empty canvas. Per feedback (2026-09-29): grabbing a wire lead too close to the
     /// background used to pan the canvas instead far too easily. One finger now only ever does two things -
@@ -1422,6 +1554,19 @@ struct ContentView: View {
                 // scrim above it already blocks most of these, but a touch that starts outside canvasSize
                 // (in the "outside the canvas" margin) reaches this gesture directly, without the scrim.
                 guard liveEdit == nil else { return }
+                // Group-selection mode (5E) draws a marquee instead of panning or dragging a wire segment;
+                // handled first and returns, so none of the branches below run while it is active.
+                if tool == .group {
+                    let start = canvasPoint(from: value.startLocation)
+                    let current = canvasPoint(from: value.location)
+                    let rect = CGRect(x: min(start.x, current.x), y: min(start.y, current.y),
+                                       width: abs(current.x - start.x), height: abs(current.y - start.y))
+                    groupSelectionRect = rect
+                    // "一部でも重なった...強調色になる": any item whose own bounds merely intersect the
+                    // marquee, not only ones fully enclosed by it.
+                    groupSelectionCandidates = Set(allMembers().filter { member in bounds(for: member).map { $0.intersects(rect) } ?? false })
+                    return
+                }
                 // Very short transparent targets can deliver the touch to this
                 // background. Resolve once at touch-down and retain that choice.
                 if segmentDrag == nil && !isPanningCanvas {
@@ -1440,6 +1585,12 @@ struct ContentView: View {
                 )
             }
             .onEnded { _ in
+                if tool == .group {
+                    if !groupSelectionCandidates.isEmpty { pendingGroupConfirm = groupSelectionCandidates }
+                    groupSelectionRect = nil
+                    groupSelectionCandidates = []
+                    return
+                }
                 if activePanSource == .singleFinger { canvasPanOrigin = canvasOffset; activePanSource = nil }
                 segmentDrag = nil
                 isPanningCanvas = false
@@ -1502,6 +1653,124 @@ struct ContentView: View {
         let origin = textDragOrigins[textID] ?? texts[index].position
         textDragOrigins[textID] = origin
         texts[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
+    }
+    // MARK: Grouping (5E)
+    private func allMembers() -> [GroupMember] {
+        symbols.map { .symbol($0.id) } + notes.map { .note($0.id) } + texts.map { .text($0.id) }
+    }
+    private func groupID(containing member: GroupMember) -> UUID? { groups.first(where: { $0.members.contains(member) })?.id }
+    private func groupID(ofSymbol id: UUID) -> UUID? { groupID(containing: .symbol(id)) }
+    private func groupID(ofNote id: UUID) -> UUID? { groupID(containing: .note(id)) }
+    private func groupID(ofText id: UUID) -> UUID? { groupID(containing: .text(id)) }
+    /// A member's own bounds, in canvas space - used both for marquee hit-testing ("一部でも重なった" per this
+    /// task) and for a selected group's own outline. A text item has no fixed size of its own; a generous
+    /// fixed approximation is fine here, since neither use needs pixel precision.
+    private func bounds(for member: GroupMember) -> CGRect? {
+        switch member {
+        case .symbol(let id):
+            guard let symbol = symbols.first(where: { $0.id == id }) else { return nil }
+            return symbol.kind.body(at: symbol.position, rotation: symbol.rotation, size: symbol.size)
+        case .note(let id):
+            guard let note = notes.first(where: { $0.id == id }) else { return nil }
+            return CGRect(x: note.position.x - note.size.width/2, y: note.position.y - note.size.height/2, width: note.size.width, height: note.size.height)
+        case .text(let id):
+            guard let text = texts.first(where: { $0.id == id }) else { return nil }
+            let approximateSize = CGSize(width: 160, height: 40)
+            return CGRect(x: text.position.x - approximateSize.width/2, y: text.position.y - approximateSize.height/2, width: approximateSize.width, height: approximateSize.height)
+        }
+    }
+    private func groupBounds(_ group: GroupItem) -> CGRect? {
+        group.members.compactMap(bounds).reduce(nil) { partial, rect in partial?.union(rect) ?? rect }
+    }
+    /// Creates a new group from `newMembers`, or - per this task's "入れ子は作らない" requirement - widens
+    /// any existing group(s) the selection touches instead, merging them all (plus the new members) into one
+    /// flat group rather than nesting.
+    private func createOrMergeGroup(with newMembers: Set<GroupMember>) {
+        guard !newMembers.isEmpty else { return }
+        pushUndo()
+        let touchedGroupIDs = groups.filter { !$0.members.isDisjoint(with: newMembers) }.map(\.id)
+        var mergedMembers = newMembers
+        for id in touchedGroupIDs {
+            if let touched = groups.first(where: { $0.id == id }) { mergedMembers.formUnion(touched.members) }
+        }
+        groups.removeAll { touchedGroupIDs.contains($0.id) }
+        let group = GroupItem(members: mergedMembers)
+        groups.append(group)
+        selectedGroup = group.id; selectedSymbol = nil; selectedNote = nil; selectedText = nil
+    }
+    /// Removes the group record only - members stay exactly where they are, individually selectable again.
+    private func ungroup(_ id: UUID) {
+        guard groups.contains(where: { $0.id == id }) else { return }
+        pushUndo()
+        groups.removeAll { $0.id == id }
+        selectedGroup = nil
+    }
+    /// Deletes an entire group AND all its members - per this task's "グループ単位でのみ削除できる", there is
+    /// no way to delete just one member while it is still grouped (ungroup first).
+    private func removeGroup(_ id: UUID) {
+        guard let group = groups.first(where: { $0.id == id }) else { return }
+        pushUndo(); inspectorSessionPushed = false
+        for member in group.members {
+            switch member {
+            case .symbol(let symbolID):
+                if let symbol = symbols.first(where: { $0.id == symbolID }) {
+                    let symbolPins = pins(for: symbol)
+                    wires.removeAll { wire in symbolPins.contains { pin in wire.start.distance(to: pin) < 1 || wire.end.distance(to: pin) < 1 } }
+                }
+                symbols.removeAll { $0.id == symbolID }
+            case .note(let noteID):
+                notes.removeAll { $0.id == noteID }
+                if pendingRelateFrom?.id == noteID { pendingRelateFrom = nil }
+                if linkingNote == noteID { linkingNote = nil }
+            case .text(let textID):
+                texts.removeAll { $0.id == textID }
+            }
+        }
+        groups.removeAll { $0.id == id }
+        selectedGroup = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil
+        reroute()
+    }
+    /// Moves every member of a group by the same translation, reusing each member's own move(...) - which
+    /// keeps a connected wire's outer segment attached and auto-rerouted exactly as it already does for a
+    /// single, ungrouped move (this task's "配線はつながったまま...自動で再描画する"). Pre-populates every
+    /// member's own drag-origin dictionary entry before the first move(...) call of the gesture, so each of
+    /// those calls' own "if origin == nil { pushUndo() }" guard sees it already set and does not also push -
+    /// this function's own single pushUndo() above is the only one for the whole group-drag gesture.
+    private func moveGroup(_ id: UUID, by translation: CGSize) {
+        guard activePanSource == nil, let group = groups.first(where: { $0.id == id }) else { return }
+        if groupDragActive != id {
+            pushUndo()
+            groupDragActive = id
+            for member in group.members {
+                switch member {
+                case .symbol(let symbolID):
+                    if let symbol = symbols.first(where: { $0.id == symbolID }) { dragOrigins[symbolID] = symbol.position }
+                case .note(let noteID):
+                    if let note = notes.first(where: { $0.id == noteID }) { noteDragOrigins[noteID] = note.position }
+                case .text(let textID):
+                    if let text = texts.first(where: { $0.id == textID }) { textDragOrigins[textID] = text.position }
+                }
+            }
+        }
+        for member in group.members {
+            switch member {
+            case .symbol(let symbolID): move(symbolID: symbolID, by: translation)
+            case .note(let noteID): move(noteID: noteID, by: translation)
+            case .text(let textID): move(textID: textID, by: translation)
+            }
+        }
+    }
+    private func endGroupDrag(_ id: UUID) {
+        if let group = groups.first(where: { $0.id == id }) {
+            for member in group.members {
+                switch member {
+                case .symbol(let symbolID): dragOrigins[symbolID] = nil
+                case .note(let noteID): noteDragOrigins[noteID] = nil
+                case .text(let textID): textDragOrigins[textID] = nil
+                }
+            }
+        }
+        groupDragActive = nil
     }
     private func pins(for symbol: SymbolItem) -> [CGPoint] { symbol.kind.pins(at: symbol.position, rotation:symbol.rotation, size:symbol.size, blockPins:symbol.blockPins) }
     private func nearestPin(to point: CGPoint) -> CGPoint? { let pin = symbols.flatMap(pins).min { $0.distance(to: point) < $1.distance(to: point) }; guard let pin, pin.distance(to: point) < 70 else { return nil }; return pin }

@@ -1216,6 +1216,161 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["インスペクタ"].waitForExistence(timeout:2),"confirming must still return to the inspector")
     }
 
+    // MARK: - Grouping (5E)
+
+    /// Drags a marquee (in group-selection mode) over the given canvas-space rectangle corners and confirms
+    /// the resulting "グループ化しますか？" alert - the drag path only needs to start on empty canvas (a
+    /// touch starting exactly on an item is claimed by that item's own drag gesture instead, per
+    /// canvasPanGesture/each item's highPriorityGesture), not on the items themselves.
+    @MainActor
+    private func groupViaMarquee(_ app: XCUIApplication, from: CGVector, to: CGVector) {
+        app.buttons["group-mode-toggle"].tap()
+        let canvas = element(app,"circuit-canvas")
+        let start = canvas.coordinate(withNormalizedOffset:.zero).withOffset(from)
+        let end = canvas.coordinate(withNormalizedOffset:.zero).withOffset(to)
+        start.press(forDuration:0.2, thenDragTo: end)
+        XCTAssertTrue(app.staticTexts["グループ化しますか？"].waitForExistence(timeout:2))
+        app.buttons["はい"].tap()
+    }
+
+    @MainActor
+    func testGroupingViaMarqueeMergesPartiallyOverlappingItemsAndSelectingHidesIndividualEditingUI() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        // Encloses "24 V → 5 V" (120,160) and "Temperature" (120,390) - both merely brush the marquee's own
+        // edges, not fully inside it, per this task's "一部でも重なった...対象" requirement.
+        groupViaMarquee(app, from: CGVector(dx:60,dy:120), to: CGVector(dx:200,dy:420))
+
+        let groupA = element(app,"symbol-24 V → 5 V-group").value as? String ?? ""
+        let groupB = element(app,"symbol-Temperature-group").value as? String ?? ""
+        XCTAssertFalse(groupA.isEmpty,"both marquee-selected symbols must have joined a group")
+        XCTAssertEqual(groupA, groupB, "both marquee-selected symbols must be in the SAME group")
+        // A symbol not touched by the marquee must not have joined it.
+        XCTAssertEqual(element(app,"symbol-Main MCU-group").value as? String, "")
+
+        element(app,"symbol-24 V → 5 V").tap()
+        XCTAssertTrue(element(app,"group-highlight").waitForExistence(timeout:2),"tapping a grouped member must select the whole group")
+        XCTAssertTrue(app.buttons["group-ungroup"].exists)
+        // "グループのメンバーは、個別編集...ができない" - a grouped block gets none of its own resize handles,
+        // since those are only ever shown for selectedSymbol, which a grouped member never sets.
+        XCTAssertFalse(element(app,"symbol-24 V → 5 V-resize-tl").exists,"a grouped member must not show its own individual resize handles")
+    }
+
+    @MainActor
+    func testDraggingOneGroupedSymbolMovesTheOtherAndKeepsTheConnectingWireAttached() throws {
+        let app = XCUIApplication(); app.launch()
+        // "24 V → 5 V" (120,160) and "Main MCU" (370,250) are wired together by the seed diagram's wire-0 -
+        // excludes the seed note (y ≤ 130) and CAN/Temperature (outside this rectangle).
+        groupViaMarquee(app, from: CGVector(dx:60,dy:140), to: CGVector(dx:420,dy:320))
+        XCTAssertEqual(element(app,"symbol-24 V → 5 V-group").value as? String, element(app,"symbol-Main MCU-group").value as? String)
+        XCTAssertFalse((element(app,"symbol-24 V → 5 V-group").value as? String ?? "").isEmpty)
+
+        func pin(_ title: String, _ index: Int = 0) -> [Double] { (element(app,"symbol-\(title)-pin-\(index)").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        let beforeA = pin("24 V → 5 V"), beforeB = pin("Main MCU")
+
+        // Dragging just the one member must move BOTH - "メンバーのどれかをドラッグすると、グループ全体が動く".
+        let handle = element(app,"symbol-24 V → 5 V").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handle.press(forDuration:0.2, thenDragTo: handle.withOffset(CGVector(dx:50,dy:50)))
+
+        let afterA = pin("24 V → 5 V"), afterB = pin("Main MCU")
+        XCTAssertEqual(afterA[0]-beforeA[0], 50, accuracy:2, "the dragged member itself must have moved")
+        XCTAssertEqual(afterA[1]-beforeA[1], 50, accuracy:2)
+        XCTAssertEqual(afterB[0]-beforeB[0], 50, accuracy:2, "the OTHER grouped member must have moved by the same amount")
+        XCTAssertEqual(afterB[1]-beforeB[1], 50, accuracy:2)
+
+        // "配線はつながったまま...自動で再描画する": wire-0's endpoints must still sit exactly on both symbols'
+        // (now-moved) pins, not the old, now-stale positions. The seed wire actually runs from "24 V → 5 V"'s
+        // RIGHT pin (pin-1, x = position + 45) to "Main MCU"'s LEFT pin (pin-0, x = position - 45) - pin-0
+        // above was only ever used to measure how far each whole block moved, which is the same for every
+        // one of its pins regardless of which one a wire happens to touch.
+        let afterARightPin = pin("24 V → 5 V", 1), afterBLeftPin = pin("Main MCU", 0)
+        let wireValue = (element(app,"wire-0").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+        XCTAssertEqual(wireValue.count, 4)
+        XCTAssertEqual(wireValue[0], afterARightPin[0], accuracy:2); XCTAssertEqual(wireValue[1], afterARightPin[1], accuracy:2)
+        XCTAssertEqual(wireValue[2], afterBLeftPin[0], accuracy:2); XCTAssertEqual(wireValue[3], afterBLeftPin[1], accuracy:2)
+    }
+
+    @MainActor
+    func testEditModeOnlyDeletesTheWholeGroupNotIndividualMembers() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
+        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+        let groupID = element(app,"symbol-抵抗-group").value as? String ?? ""
+        XCTAssertFalse(groupID.isEmpty)
+        XCTAssertEqual(groupID, element(app,"symbol-コンデンサ-group").value as? String)
+
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertFalse(element(app,"symbol-抵抗-edit-delete").exists,"a grouped member must not show its own individual delete badge")
+        XCTAssertFalse(element(app,"symbol-コンデンサ-edit-delete").exists)
+        let groupDelete = element(app,"group-\(groupID)-edit-delete")
+        XCTAssertTrue(groupDelete.waitForExistence(timeout:2),"the group itself must show exactly one delete badge")
+        groupDelete.tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["削除"].tap()
+        XCTAssertFalse(element(app,"symbol-抵抗").exists,"deleting the group must delete every member")
+        XCTAssertFalse(element(app,"symbol-コンデンサ").exists)
+    }
+
+    @MainActor
+    func testUngroupingRestoresIndividualSelectionAndEditing() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
+        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+
+        element(app,"symbol-抵抗").tap()
+        XCTAssertTrue(app.buttons["group-ungroup"].waitForExistence(timeout:2))
+        app.buttons["group-ungroup"].tap()
+
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, "", "ungrouping must clear both members' group membership")
+        XCTAssertEqual(element(app,"symbol-コンデンサ-group").value as? String, "")
+
+        // Individual editing must work again - a non-block circuit symbol's rotate button only ever shows for
+        // an individually-selected (not grouped) symbol.
+        element(app,"symbol-抵抗").tap()
+        XCTAssertTrue(app.buttons["symbol-抵抗-rotate"].waitForExistence(timeout:2),"the ungrouped symbol must be individually selectable again")
+    }
+
+    @MainActor
+    func testGroupingAnItemAlreadyInAGroupWidensItInsteadOfNesting() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:700, y:580)
+        place(app, category:"受動部品", name:"コイル", x:700, y:660)
+
+        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:610))   // 抵抗 + コンデンサ
+        let firstGroup = element(app,"symbol-抵抗-group").value as? String ?? ""
+        XCTAssertFalse(firstGroup.isEmpty)
+        XCTAssertEqual(element(app,"symbol-コイル-group").value as? String, "", "コイル must not have joined the first group")
+
+        groupViaMarquee(app, from: CGVector(dx:620,dy:550), to: CGVector(dx:780,dy:690))   // コンデンサ + コイル
+        // "2つの既存グループにまたがって選択した場合も、1つのグループに統合する" - here it is one existing
+        // group (抵抗+コンデンサ) touched by a new selection (コンデンサ+コイル): all three must end up in ONE
+        // flat group, not a separate new one nested alongside the first.
+        let merged = element(app,"symbol-抵抗-group").value as? String ?? ""
+        XCTAssertFalse(merged.isEmpty)
+        XCTAssertEqual(merged, element(app,"symbol-コンデンサ-group").value as? String)
+        XCTAssertEqual(merged, element(app,"symbol-コイル-group").value as? String, "widening an existing group must not leave a member behind in a separate group")
+    }
+
+    @MainActor
+    func testUndoRedoOnGroupingAndUngrouping() throws {
+        let app = XCUIApplication(); app.launch()
+        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
+        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+        let groupID = element(app,"symbol-抵抗-group").value as? String ?? ""
+        XCTAssertFalse(groupID.isEmpty)
+
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, "", "undo must remove the just-created group")
+
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, groupID, "redo must restore the exact same group")
+        XCTAssertEqual(element(app,"symbol-コンデンサ-group").value as? String, groupID)
+    }
+
     /// Parses the "x=..;y=..;w=..;h=.." accessibility values this feature exposes for its hole/card rects
     /// back into a CGRect. Not a plain "x,y,w,h" comma join: a value that reads as a pure number can come
     /// back from XCUITest with locale grouping separators inserted into it (e.g. "2400" as "2,400"), which
