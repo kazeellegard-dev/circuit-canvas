@@ -2715,4 +2715,147 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(coordinates(element(app,"wire-3")).prefix(2).map { $0 },coordinates(app.buttons["symbol-直流電源-pin-1"]))
         assertRoutesClear(app,count:5,extraSymbols:["直流電源","GND"])
     }
+
+    // MARK: Grid snapping (5F)
+
+    private func onFifteenPointGrid(_ value: Double) -> Bool { abs(value.truncatingRemainder(dividingBy: 15)) < 0.5 }
+
+    @MainActor
+    func testPlacingASymbolNoteAndTextSnapsThePositionToTheGrid() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
+        app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+
+        // Every tap point below (703/502, 704/803, 706/906) is deliberately off the 15pt grid.
+        place(app, category:"受動部品", name:"抵抗", x:703, y:502)
+        let pin = coordinates(app.buttons["symbol-抵抗-pin-0"])
+        XCTAssertTrue(onFifteenPointGrid(pin[0]) && onFifteenPointGrid(pin[1]), "a placed symbol's pin must land on the 15pt grid: \(pin)")
+
+        app.buttons["＋メモ"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:704,dy:803)).tap()
+        let note = element(app,"experiment-note-新しいメモ")
+        XCTAssertTrue(note.waitForExistence(timeout:2))
+        let notePosition = position(note.value as? String)
+        XCTAssertTrue(onFifteenPointGrid(notePosition[0]) && onFifteenPointGrid(notePosition[1]), "a placed note must land on the 15pt grid: \(notePosition)")
+
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:706,dy:906)).tap()
+        let text = element(app,"text-テキスト")
+        XCTAssertTrue(text.waitForExistence(timeout:2))
+        let textPosition = position(text.value as? String)
+        XCTAssertTrue(onFifteenPointGrid(textPosition[0]) && onFifteenPointGrid(textPosition[1]), "a placed text item must land on the 15pt grid: \(textPosition)")
+    }
+
+    @MainActor
+    func testDraggingASymbolNoteOrTextSnapsToTheGridOnRelease() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
+        app.launch()
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+
+        // The seed symbol's own position (120,160) is not itself on the grid, and neither is the drag
+        // amount (37,23) - proving the RELEASE snaps it, not a lucky starting point or a round drag number.
+        let symbol = element(app,"symbol-24 V → 5 V")
+        XCTAssertTrue(symbol.waitForExistence(timeout:3))
+        let symbolStart = symbol.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        symbolStart.press(forDuration:0.2,thenDragTo:symbolStart.withOffset(CGVector(dx:37,dy:23)))
+        let pin = coordinates(app.buttons["symbol-24 V → 5 V-pin-0"])
+        XCTAssertTrue(onFifteenPointGrid(pin[0]) && onFifteenPointGrid(pin[1]), "a dragged symbol's pin must land on the 15pt grid: \(pin)")
+
+        let note = element(app,"experiment-note-R12を変更")
+        let noteBefore = position(note.value as? String)
+        let noteStart = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        noteStart.press(forDuration:0.2,thenDragTo:noteStart.withOffset(CGVector(dx:37,dy:23)))
+        let noteAfter = position(note.value as? String)
+        XCTAssertNotEqual(noteAfter, noteBefore, "the note must really have moved")
+        XCTAssertTrue(onFifteenPointGrid(noteAfter[0]) && onFifteenPointGrid(noteAfter[1]), "a dragged note must land on the 15pt grid: \(noteAfter)")
+
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:800)).tap()
+        let text = element(app,"text-テキスト")
+        XCTAssertTrue(text.waitForExistence(timeout:2))
+        let textStart = text.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        textStart.press(forDuration:0.2,thenDragTo:textStart.withOffset(CGVector(dx:23,dy:37)))
+        let textAfter = position(text.value as? String)
+        XCTAssertTrue(onFifteenPointGrid(textAfter[0]) && onFifteenPointGrid(textAfter[1]), "a dragged text item must land on the 15pt grid: \(textAfter)")
+    }
+
+    @MainActor
+    func testGridSnapToggleInSettingsControlsWhetherDraggingSnaps() throws {
+        let app = XCUIApplication()
+        // Forced at launch (see UITEST_GRID_SNAP in ContentView.onAppear) rather than relying on the
+        // Settings toggle's default - gridSnapEnabled is an @AppStorage preference, so an ambient value
+        // left over from another test run must not affect whether this test starts "off".
+        app.launchEnvironment["UITEST_GRID_SNAP"] = "0"
+        app.launch()
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+        let note = element(app,"experiment-note-R12を変更")
+        XCTAssertTrue(note.waitForExistence(timeout:3))
+
+        // Off: the note lands exactly where the finger released it, not pulled to the grid.
+        let before = position(note.value as? String)
+        let start = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:37,dy:23)))
+        let offResult = position(note.value as? String)
+        XCTAssertEqual(offResult[0]-before[0], 37, accuracy: 2, "grid snap must be off")
+        XCTAssertEqual(offResult[1]-before[1], 23, accuracy: 2)
+
+        // Turning it on in Settings must take effect immediately, with no relaunch.
+        app.buttons["設定"].tap()
+        XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
+        let toggle = element(app,"settings-grid-snap")
+        XCTAssertTrue(toggle.waitForExistence(timeout:2))
+        XCTAssertEqual(toggle.value as? String, "0")
+        // A plain toggle.tap() hits the centre of the whole row (the label), which does not flip a Form
+        // switch on iPadOS - tap the switch itself at the row's trailing edge instead.
+        toggle.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1", "the Settings switch itself must have flipped on")
+        app.navigationBars["設定"].swipeDown()
+
+        let onStart = note.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        onStart.press(forDuration:0.2,thenDragTo:onStart.withOffset(CGVector(dx:37,dy:23)))
+        let onResult = position(note.value as? String)
+        XCTAssertTrue(onFifteenPointGrid(onResult[0]) && onFifteenPointGrid(onResult[1]), "after turning grid snap on, a drag must land on the 15pt grid: \(onResult)")
+    }
+
+    @MainActor
+    func testDraggingAWireSegmentSnapsItsSharedCoordinateToTheGridOnRelease() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
+        app.launch()
+        // A fresh, isolated connection - not one of the seed wires - so this test does not depend on
+        // WireRouting's own step-straightening proximity threshold incidentally kicking in.
+        place(app, category:"受動部品", name:"抵抗", x:300, y:700)
+        place(app, category:"受動部品", name:"コンデンサ", x:600, y:850)
+        app.buttons["配線"].tap()
+        app.buttons["symbol-抵抗-pin-1"].tap()
+        app.buttons["symbol-コンデンサ-pin-0"].tap()
+
+        let before = routePoints(app,3)
+        let interior = before.count > 3 ? Array(1..<(before.count-2)) : []
+        guard let segment = interior.first else { return XCTFail("expected an interior (draggable) segment on the new wire: \(before)") }
+        let a = before[segment], b = before[segment+1]
+        let horizontal = a.y == b.y
+        let target = element(app,"wire-3-segment-\(segment)")
+        XCTAssertTrue(target.waitForExistence(timeout:2))
+        let start = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        // A small, deliberately off-grid nudge (3pt) - the point is to prove the release rounds it to the
+        // grid, not that a large move happens to land there anyway.
+        start.press(forDuration:0.2,thenDragTo:start.withOffset(horizontal ? CGVector(dx:0,dy:3) : CGVector(dx:3,dy:0)))
+
+        let after = routePoints(app,3)
+        guard segment+1 < after.count else { return XCTFail("the dragged segment vanished after the drag: \(after)") }
+        let value = horizontal ? after[segment].y : after[segment].x
+        XCTAssertEqual(value.truncatingRemainder(dividingBy: 15), 0, accuracy: 0.5, "the dragged segment's shared coordinate must land on the 15pt grid: \(value)")
+    }
 }

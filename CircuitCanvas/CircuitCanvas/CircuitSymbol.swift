@@ -37,6 +37,15 @@ enum ResizableGeometry {
         return CGRect(x: center.x - 16 * k, y: center.y - 16 * k, width: 32 * k, height: 32 * k)
     }
 }
+/// Grid-snapping (5F, 2026-09-29 feedback): rounds a canvas-space coordinate to the nearest grid line.
+/// 15pt, not the drawn grid's original 24pt - 15 evenly divides every symbol frame size and pin offset
+/// (60, 120, 30, 90, and the block pin column's own +15/+30 spacing), so a symbol snapped to this grid has
+/// every one of its pins land exactly on a grid line too, not just its own origin.
+enum GridSnap {
+    static let spacing: CGFloat = 15
+    static func scalar(_ value: CGFloat) -> CGFloat { (value / spacing).rounded() * spacing }
+    static func point(_ point: CGPoint) -> CGPoint { CGPoint(x: scalar(point.x), y: scalar(point.y)) }
+}
 /// The pan offset that keeps a fixed canvas point (by default, the viewport's own center) at the same
 /// screen position across a scale change - used by the zoom menu (4E), which changes `canvasScale` directly
 /// rather than through a pinch, and must not otherwise disturb what is currently on screen.

@@ -223,6 +223,10 @@ struct ContentView: View {
     @State private var canvasName = "Circuit Canvas"
     @State private var canvasDescription = ""
     @State private var editMode = false
+    // MARK: Grid snapping (5F)
+    // A device-wide preference (not part of the canvas document), like the app's other settings-screen
+    // toggles would be if it had any yet - persists across launches, default on per 2026-09-29 feedback.
+    @AppStorage("gridSnapEnabled") private var gridSnapEnabled = true
     @State private var pendingDelete: EditDeleteTarget?
     // MARK: Grouping (5E)
     /// The canvas-space rectangle currently being dragged out in group-selection mode; nil when not dragging.
@@ -289,6 +293,12 @@ struct ContentView: View {
                 // nothing outside a test that deliberately opts in.
                 if let raw = ProcessInfo.processInfo.environment["UITEST_INITIAL_ZOOM"], let value = Double(raw) {
                     canvasScale = value; canvasScaleOrigin = value
+                }
+                // Same rationale as UITEST_INITIAL_ZOOM above: gridSnapEnabled is an @AppStorage preference,
+                // so without this a test that flips the Settings toggle would leak that change into the
+                // simulator's persisted UserDefaults and make later tests (and manual runs) order-dependent.
+                if let raw = ProcessInfo.processInfo.environment["UITEST_GRID_SNAP"] {
+                    gridSnapEnabled = (raw as NSString).boolValue
                 }
             }
             .toolbar {
@@ -410,6 +420,14 @@ struct ContentView: View {
             Section("説明") {
                 TextField("説明（任意）", text: $canvasDescription, axis: .vertical)
                     .accessibilityIdentifier("settings-canvas-description")
+            }
+            Section {
+                Toggle("グリッドにスナップ", isOn: $gridSnapEnabled)
+                    .accessibilityIdentifier("settings-grid-snap")
+            } header: {
+                Text("グリッド")
+            } footer: {
+                Text("シンボル・メモ・テキストの配置・移動、配線の手動調整が、\(Int(GridSnap.spacing))pt間隔の格子に自動的に揃うようになります。")
             }
             // Kept in its own section, at the very bottom, away from the harmless fields above - an
             // irreversible action deserves some distance from an accidental tap.
@@ -796,7 +814,7 @@ struct ContentView: View {
                                     else { move(symbolID: symbol.id, by: translation) }
                                 }
                                 .onEnded { _ in
-                                    if let gid = groupOfSymbol { endGroupDrag(gid) } else { dragOrigins[symbol.id] = nil }
+                                    if let gid = groupOfSymbol { endGroupDrag(gid) } else { snapToGrid(symbolID: symbol.id); dragOrigins[symbol.id] = nil }
                                 }
                         )
                     // Exposes which group (if any) this symbol belongs to, as an opaque id a test can compare
@@ -907,7 +925,7 @@ struct ContentView: View {
                                     else { move(noteID: note.id, by: translation) }
                                 }
                                 .onEnded { _ in
-                                    if let gid = groupOfNote { endGroupDrag(gid) } else { noteDragOrigins[note.id] = nil }
+                                    if let gid = groupOfNote { endGroupDrag(gid) } else { snapToGrid(noteID: note.id); noteDragOrigins[note.id] = nil }
                                 }
                         )
                         .contextMenu {
@@ -1043,7 +1061,7 @@ struct ContentView: View {
                                     else { move(textID: text.id, by: translation) }
                                 }
                                 .onEnded { _ in
-                                    if let gid = groupOfText { endGroupDrag(gid) } else { textDragOrigins[text.id] = nil }
+                                    if let gid = groupOfText { endGroupDrag(gid) } else { snapToGrid(textID: text.id); textDragOrigins[text.id] = nil }
                                 }
                         )
                     Text("group").font(.system(size:1)).opacity(0.01)
@@ -1155,9 +1173,9 @@ struct ContentView: View {
                 else if tool == .wire, let pin = nearestPin(to: point), groupID(ownerOfPin: pin) == nil {
                     selectWirePin(pin)
                 }
-                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; selectedGroup = nil; tool = .select }
-                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: point)); selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; tool = .select; reroute() }
-                else if tool == .text { pushUndo(); texts.append(.init(position: point)); selectedText = texts.last?.id; selectedSymbol = nil; selectedNote = nil; selectedGroup = nil; tool = .select }
+                else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: snappedIfEnabled(point))); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; selectedGroup = nil; tool = .select }
+                else if tool == .symbol { pushUndo(); symbols.append(.init(title: selectedLibrary.rawValue, kind: selectedLibrary, position: snappedIfEnabled(point))); selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; tool = .select; reroute() }
+                else if tool == .text { pushUndo(); texts.append(.init(position: snappedIfEnabled(point))); selectedText = texts.last?.id; selectedSymbol = nil; selectedNote = nil; selectedGroup = nil; tool = .select }
                 else { selectedNote = nil; selectedSymbol = nil; selectedText = nil; selectedGroup = nil }
             }
     }
@@ -1714,6 +1732,31 @@ struct ContentView: View {
         textDragOrigins[textID] = origin
         texts[index].position = CGPoint(x: origin.x + translation.width, y: origin.y + translation.height)
     }
+    // MARK: Grid snapping (5F)
+    // Deliberately not inside `move(...)` itself: per 2026-09-29 feedback the item should move freely under
+    // the finger while dragging and only snap once it is released, not jump between grid points mid-drag.
+    // Called from each drag's onEnded, after the last `move(...)`, and folded into the same undo step that
+    // drag's first `move(...)` call already pushed (no pushUndo() here).
+    private func snapToGrid(symbolID: UUID) {
+        guard gridSnapEnabled, let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
+        let oldPins = pins(for: symbols[index])
+        symbols[index].position = GridSnap.point(symbols[index].position)
+        let newPins = pins(for: symbols[index])
+        for wireIndex in wires.indices {
+            if let point = SymbolKind.remapped(wires[wireIndex].start, from: oldPins, to: newPins) { wires[wireIndex].start = point }
+            if let point = SymbolKind.remapped(wires[wireIndex].end, from: oldPins, to: newPins) { wires[wireIndex].end = point }
+        }
+        reroute()
+    }
+    private func snapToGrid(noteID: UUID) {
+        guard gridSnapEnabled, let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        notes[index].position = GridSnap.point(notes[index].position)
+    }
+    private func snapToGrid(textID: UUID) {
+        guard gridSnapEnabled, let index = texts.firstIndex(where: { $0.id == textID }) else { return }
+        texts[index].position = GridSnap.point(texts[index].position)
+    }
+    private func snappedIfEnabled(_ point: CGPoint) -> CGPoint { gridSnapEnabled ? GridSnap.point(point) : point }
     // MARK: Grouping (5E)
     private func allMembers() -> [GroupMember] {
         symbols.map { .symbol($0.id) } + notes.map { .note($0.id) } + texts.map { .text($0.id) }
@@ -1834,11 +1877,14 @@ struct ContentView: View {
     }
     private func endGroupDrag(_ id: UUID) {
         if let group = groups.first(where: { $0.id == id }) {
+            // Each member snaps independently, same as a lone drag of that item would - a grid-aligned
+            // group stays grid-aligned, and one that wasn't (e.g. grouped before 5F) tidies up on its
+            // next move rather than requiring a one-time migration.
             for member in group.members {
                 switch member {
-                case .symbol(let symbolID): dragOrigins[symbolID] = nil
-                case .note(let noteID): noteDragOrigins[noteID] = nil
-                case .text(let textID): textDragOrigins[textID] = nil
+                case .symbol(let symbolID): snapToGrid(symbolID: symbolID); dragOrigins[symbolID] = nil
+                case .note(let noteID): snapToGrid(noteID: noteID); noteDragOrigins[noteID] = nil
+                case .text(let textID): snapToGrid(textID: textID); textDragOrigins[textID] = nil
                 }
             }
         }
@@ -1901,7 +1947,7 @@ struct ContentView: View {
                     beginSegmentDrag(at: value.startLocation, translation: value.translation)
                     updateSegmentDrag(translation: value.translation)
                 }
-                .onEnded { _ in segmentDrag = nil })
+                .onEnded { _ in endSegmentDrag() })
             .allowsHitTesting(tool == .select && !editMode)
     }
     /// Edit mode (4C): tapping any segment deletes just that straight piece, no confirmation. Covers every
@@ -1947,6 +1993,25 @@ struct ContentView: View {
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let delta = (horizontal ? translation.height : translation.width) / canvasScale
         wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
+        wires[i].manual = true
+        wires[i].manualPoints = wires[i].points
+    }
+    /// Grid snapping (5F): a manually-dragged segment moves freely while dragging, then snaps its shared
+    /// coordinate (the y of a horizontal segment, the x of a vertical one) to the grid on release - same
+    /// "free during drag, snap on release" timing as symbol/note/text drags.
+    private func endSegmentDrag() {
+        defer { segmentDrag = nil }
+        // The segment count can shrink mid-drag (WireRouting.moved straightens a step once the dragged
+        // side gets close enough to the other) - drag.segment, fixed at drag start, would then index past
+        // the end of the now-shorter points array.
+        guard gridSnapEnabled, let drag = segmentDrag, let i = wires.firstIndex(where: { $0.id == drag.wireID }),
+              drag.segment + 1 < wires[i].points.count else { return }
+        let a = wires[i].points[drag.segment], b = wires[i].points[drag.segment+1]
+        let horizontal = a.y == b.y
+        let current = horizontal ? a.y : a.x
+        let snappedValue = GridSnap.scalar(current)
+        guard snappedValue != current else { return }
+        wires[i].points = WireRouting.moved(wires[i].points, segment: drag.segment, delta: snappedValue - current, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }
@@ -2209,14 +2274,16 @@ private struct ScrimWithHole: Shape {
 /// Draws the grid, and - since it is exactly canvasSize, unlike the (larger, pannable) viewport behind it -
 /// also an opaque fill and border for the canvas's own bounds, so where "the canvas" actually ends is
 /// visible (feedback, 2026-09-29: "どこまでが有効な範囲かわかりません").
+/// Spacing matches `GridSnap.spacing` (5F, 2026-09-29 feedback) - the drawn grid and the grid items snap to
+/// must always be the same one, or a snapped item would visibly sit off the lines it appears to align with.
 private struct Grid: View {
     var body: some View {
         Canvas { context, size in
             let bounds = CGRect(origin: .zero, size: size)
             context.fill(Path(bounds), with: .color(Color(.systemBackground)))
             var path = Path()
-            for x in stride(from: 0, through: size.width, by: 24) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }
-            for y in stride(from: 0, through: size.height, by: 24) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }
+            for x in stride(from: 0, through: size.width, by: GridSnap.spacing) { path.move(to: .init(x: x, y: 0)); path.addLine(to: .init(x: x, y: size.height)) }
+            for y in stride(from: 0, through: size.height, by: GridSnap.spacing) { path.move(to: .init(x: 0, y: y)); path.addLine(to: .init(x: size.width, y: y)) }
             context.stroke(path, with: .color(.secondary.opacity(0.12)), lineWidth: 1)
             context.stroke(Path(bounds), with: .color(.accentColor.opacity(0.6)), lineWidth: 3)
         }
