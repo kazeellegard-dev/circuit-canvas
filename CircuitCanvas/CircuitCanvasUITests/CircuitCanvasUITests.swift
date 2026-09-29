@@ -21,9 +21,14 @@ final class CircuitCanvasUITests: XCTestCase {
     /// Every test launches through this, with grid snapping (5F) forced off unless the test opts back in:
     /// the tests written before 5F place and drag by exact, deliberately off-grid amounts and assert those
     /// exact coordinates, and `gridSnapEnabled` is otherwise a persisted, default-on preference.
+    /// A real launch starts blank and centered (2026-09-29), so the sample circuit these tests were written
+    /// against is drawn first (UITEST_SEED_SAMPLE), at the old top-left view; the first-launch tour (3D)
+    /// stays out of the way unless a test is about it (see makeOnboardingApp).
     private func makeApp(gridSnap: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["UITEST_GRID_SNAP"] = gridSnap ? "1" : "0"
+        app.launchEnvironment["UITEST_SEED_SAMPLE"] = "1"
+        app.launchEnvironment["UITEST_ONBOARDING"] = "off"
         return app
     }
 
@@ -2979,5 +2984,132 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(coordinates(app.buttons["symbol-24 V → 5 V-pin-0"]), pinBefore, "a refused drag must leave the symbol where it was")
         XCTAssertEqual(routePoints(app,0), wireBefore, "and its wire")
         XCTAssertFalse(app.buttons["undo-button"].isEnabled, "and add nothing to the Undo history")
+    }
+
+    // MARK: - Onboarding coachmarks (3D) and the blank, centered launch
+
+    /// A real (unseeded) launch. `onboarding`: "reset" forgets "次回から表示しない" first (a genuine first
+    /// launch); nil leaves the stored preference as it is (a later, ordinary launch).
+    @MainActor private func makeOnboardingApp(onboarding: String?) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_GRID_SNAP"] = "0"
+        if let onboarding { app.launchEnvironment["UITEST_ONBOARDING"] = onboarding }
+        return app
+    }
+    private func rect(_ value: Any?) -> CGRect? {
+        var fields: [String: Double] = [:]
+        for pair in (value as? String ?? "").split(separator: ";") {
+            let parts = pair.split(separator: "=")
+            if parts.count == 2, let number = Double(parts[1].replacingOccurrences(of: ",", with: "")) { fields[String(parts[0])] = number }
+        }
+        guard let x = fields["x"], let y = fields["y"], let w = fields["w"], let h = fields["h"] else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+    /// The bubble must sit right next to (above or below) the element it describes, and overlap it
+    /// horizontally - or, for a target too tall to leave room on either side, sit on top of it.
+    @MainActor private func assertBubbleIsNextToItsTarget(_ app: XCUIApplication, step: String, file: StaticString = #filePath, line: UInt = #line) {
+        let bubble = element(app, "coachmark").frame
+        guard let target = rect(element(app, "coachmark-target").value) else {
+            return XCTFail("step \(step): no highlighted target (\(String(describing: element(app, "coachmark-target").value)))", file: file, line: line)
+        }
+        XCTAssertGreaterThan(target.width, 20, "step \(step): the target must be a real element, not a placeholder", file: file, line: line)
+        XCTAssertTrue(bubble.minX < target.maxX && bubble.maxX > target.minX, "step \(step): bubble \(bubble) must overlap target \(target) horizontally", file: file, line: line)
+        let gap = min(abs(bubble.minY - target.maxY), abs(target.minY - bubble.maxY))
+        XCTAssertTrue(gap <= 20 || target.contains(bubble), "step \(step): bubble \(bubble) must be next to target \(target)", file: file, line: line)
+        XCTAssertTrue(app.frame.contains(bubble), "step \(step): bubble \(bubble) must be fully on screen", file: file, line: line)
+    }
+
+    @MainActor
+    func testLaunchStartsWithABlankCanvasCenteredInTheViewport() throws {
+        let app = makeOnboardingApp(onboarding: "off"); app.launch()
+        let canvas = element(app, "circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'symbol-'")).count, 0)
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'experiment-note-'")).count, 0)
+        let viewport = (element(app, "viewport-size").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        let offset = (element(app, "canvas-offset-exact").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        guard viewport.count == 2, offset.count == 2 else { return XCTFail("cannot read viewport/offset") }
+        // The canvas is 2400x1800 at 100%: its center (1200, 900) must be at the viewport's center.
+        XCTAssertEqual(viewport[0]/2 - offset[0], 1200, accuracy: 1)
+        XCTAssertEqual(viewport[1]/2 - offset[1], 900, accuracy: 1)
+        XCTAssertFalse(element(app, "coachmark").exists, "UITEST_ONBOARDING=off must keep the tour away")
+        assertWireCount(app, "0")
+    }
+
+    @MainActor
+    func testOnboardingStartsOnFirstLaunchAndNextWalksEveryStepToTheQuestion() throws {
+        let app = makeOnboardingApp(onboarding: "reset"); app.launch()
+        let bubble = element(app, "coachmark")
+        XCTAssertTrue(bubble.waitForExistence(timeout: 3), "O1: the tour starts by itself on a first launch")
+        let titles = ["ライブラリ", "追加と配線", "キャンバス", "確認（インスペクタ）", "拡大・縮小と移動"]
+        for (index, title) in titles.enumerated() {
+            let progress = element(app, "coachmark-progress")
+            XCTAssertTrue(progress.waitForExistence(timeout: 2))
+            XCTAssertEqual(progress.label, "\(index + 1) / \(titles.count)")
+            XCTAssertEqual(element(app, "coachmark-title").label, title)
+            assertBubbleIsNextToItsTarget(app, step: title)
+            XCTAssertEqual(app.buttons["coachmark-next"].label, index == titles.count - 1 ? "完了" : "次へ")
+            app.buttons["coachmark-next"].tap()
+        }
+        XCTAssertTrue(app.alerts.buttons["次回から表示しない"].waitForExistence(timeout: 2), "O2: the question follows the last step")
+        XCTAssertFalse(bubble.exists)
+        app.alerts.buttons["次回も表示する"].tap()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    @MainActor
+    func testOnboardingSkipAlsoAsksTheQuestion() throws {
+        let app = makeOnboardingApp(onboarding: "reset"); app.launch()
+        XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3))
+        app.buttons["coachmark-next"].tap()
+        XCTAssertTrue(element(app, "coachmark-progress").waitForExistence(timeout: 2))
+        XCTAssertEqual(element(app, "coachmark-progress").label, "2 / 5")
+        app.buttons["coachmark-skip"].tap()
+        XCTAssertTrue(app.alerts.buttons["次回から表示しない"].waitForExistence(timeout: 2), "O3")
+        XCTAssertFalse(element(app, "coachmark").exists)
+        // While the tour runs, nothing beneath it reacts; once it is over, the canvas works again.
+        app.alerts.buttons["次回も表示する"].tap()
+        app.buttons["＋メモ"].tap()
+        XCTAssertTrue(app.staticTexts["キャンバスをタップして付箋を配置"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testDontShowAgainSurvivesARelaunchAndShowAgainDoesNot() throws {
+        // "次回も表示する": the next ordinary launch shows the tour again.
+        var app = makeOnboardingApp(onboarding: "reset"); app.launch()
+        XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3))
+        app.buttons["coachmark-skip"].tap()
+        app.alerts.buttons["次回も表示する"].tap()
+        app.terminate()
+        app = makeOnboardingApp(onboarding: nil); app.launch()
+        XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3))
+        // "次回から表示しない": it does not start by itself any more (O4).
+        app.buttons["coachmark-skip"].tap()
+        app.alerts.buttons["次回から表示しない"].tap()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        sleep(1)   // let the preference reach disk before the process is killed
+        app.terminate()
+        app = makeOnboardingApp(onboarding: nil); app.launch()
+        XCTAssertTrue(element(app, "circuit-canvas").waitForExistence(timeout: 3))
+        XCTAssertFalse(element(app, "coachmark").waitForExistence(timeout: 2), "O4: 次回から表示しない must survive a relaunch")
+    }
+
+    @MainActor
+    func testSettingsReplaysTheTourFromTheFirstStep() throws {
+        let app = makeOnboardingApp(onboarding: "off"); app.launch()
+        XCTAssertTrue(element(app, "circuit-canvas").waitForExistence(timeout: 3))
+        XCTAssertFalse(element(app, "coachmark").exists)
+        app.buttons["設定"].tap()
+        XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout: 2))
+        app.buttons["settings-show-onboarding"].tap()
+        XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3), "O5: 使い方を見る replays the tour")
+        XCTAssertFalse(app.navigationBars["設定"].exists, "and closes Settings first, so the tour points at the real screen")
+        XCTAssertEqual(element(app, "coachmark-progress").label, "1 / 5")
+        assertBubbleIsNextToItsTarget(app, step: "replay 1")
+        app.buttons["coachmark-next"].tap()
+        XCTAssertEqual(element(app, "coachmark-progress").label, "2 / 5")
+        app.buttons["coachmark-skip"].tap()
+        XCTAssertTrue(app.alerts.buttons["次回から表示しない"].waitForExistence(timeout: 2))
+        app.alerts.buttons["次回も表示する"].tap()
     }
 }

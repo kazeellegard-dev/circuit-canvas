@@ -259,21 +259,39 @@ struct ContentView: View {
     // symbolBinding/noteBinding's setter, once per keystroke) into a single Undo step: pushed lazily, on the
     // first actual edit, not merely on opening the sheet to look.
     @State private var inspectorSessionPushed = false
-    @State private var symbols: [SymbolItem] = [
-        // All four kinds folded into the single generic block; the icon is kept explicit so the look does not change.
-        .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
-        .init(title: "Main MCU", kind: .block, position: .init(x: 370, y: 250), icon: "cpu"),
-        .init(title: "CAN", kind: .block, position: .init(x: 620, y: 250), icon: "arrow.left.and.right"),
-        .init(title: "Temperature", kind: .block, position: .init(x: 120, y: 390), icon: "sensor.tag.radiowaves.forward")
-    ]
-    @State private var notes: [NoteItem] = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
+    // A normal launch starts blank (feedback, 2026-09-29). The UI tests draw the sample circuit below before
+    // they start (see seedsSampleCircuit), since nearly all of them were written against it.
+    @State private var symbols: [SymbolItem] = []
+    @State private var notes: [NoteItem] = []
     @State private var texts: [TextItem] = []
     @State private var groups: [GroupItem] = []
-    @State private var wires: [WireItem] = [
-        .init(start: .init(x: 165, y: 160), end: .init(x: 325, y: 250)),
-        .init(start: .init(x: 415, y: 250), end: .init(x: 575, y: 250)),
-        .init(start: .init(x: 165, y: 390), end: .init(x: 325, y: 250))
-    ]
+    @State private var wires: [WireItem] = []
+    // MARK: Onboarding coachmarks (3D)
+    @AppStorage("onboardingDismissed") private var onboardingDismissed = false
+    @State private var onboardingStep: OnboardingStep?
+    @State private var showOnboardingFinish = false
+    @State private var replayOnboardingAfterSettings = false
+    @State private var coachmarkFrames: [CoachmarkTarget: CGRect] = [:]   // global coordinates
+    @State private var coachmarkRemeasure = 0   // see coachmarkOverlay's .task
+    @State private var didInitialCenter = false
+
+    /// Test-only (UITEST_SEED_SAMPLE=1): draw the sample circuit and keep the viewport at the canvas's
+    /// top-left, exactly the launch state the pre-2026-09-29 UI tests were written against.
+    private var seedsSampleCircuit: Bool { ProcessInfo.processInfo.environment["UITEST_SEED_SAMPLE"] == "1" }
+    private func seedSampleCircuit() {
+        symbols = [
+            .init(title: "24 V → 5 V", kind: .block, position: .init(x: 120, y: 160), icon: "bolt.fill"),
+            .init(title: "Main MCU", kind: .block, position: .init(x: 370, y: 250), icon: "cpu"),
+            .init(title: "CAN", kind: .block, position: .init(x: 620, y: 250), icon: "arrow.left.and.right"),
+            .init(title: "Temperature", kind: .block, position: .init(x: 120, y: 390), icon: "sensor.tag.radiowaves.forward")
+        ]
+        notes = [.init(title: "R12を変更", body: "10 kΩへ変更して波形を再測定", position: .init(x: 430, y: 80), anchor: .init(x: 370, y: 190))]
+        wires = [
+            .init(start: .init(x: 165, y: 160), end: .init(x: 325, y: 250)),
+            .init(start: .init(x: 415, y: 250), end: .init(x: 575, y: 250)),
+            .init(start: .init(x: 165, y: 390), end: .init(x: 325, y: 250))
+        ]
+    }
 
     private var compact: Bool { horizontalSizeClass == .compact }
 
@@ -284,10 +302,12 @@ struct ContentView: View {
                     editor
                     Divider()
                     libraryView.frame(height: 132)
+                        .reportsCoachmarkFrame(.library, into: $coachmarkFrames)
                 }
             }
             .navigationTitle(canvasName)
             .onAppear {
+                if seedsSampleCircuit { seedSampleCircuit() }
                 reroute()
                 // Test-only hook (Codex review, 4E round 3): XCUITest's synthetic pinch cannot reliably reach
                 // a non-preset scale in this harness, so a UI test that must start from one (e.g. to check
@@ -302,6 +322,14 @@ struct ContentView: View {
                 // simulator's persisted UserDefaults and make later tests (and manual runs) order-dependent.
                 if let raw = ProcessInfo.processInfo.environment["UITEST_GRID_SNAP"] {
                     gridSnapEnabled = (raw as NSString).boolValue
+                }
+                // UITEST_ONBOARDING: "off" never auto-starts the tour (every test that is not about it) and
+                // leaves the stored preference alone; "reset" forgets "次回から表示しない" first, so a test
+                // starts from a genuine first launch. Absent: the real first-launch behavior.
+                switch ProcessInfo.processInfo.environment["UITEST_ONBOARDING"] {
+                case "off": break
+                case "reset": onboardingDismissed = false; startOnboarding()
+                default: if !onboardingDismissed { startOnboarding() }
                 }
             }
             .toolbar {
@@ -383,7 +411,11 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showInspector) { NavigationStack { inspector.navigationTitle("インスペクタ") } }
-            .sheet(isPresented: $showSettings) { NavigationStack { settings.navigationTitle("設定") } }
+            .sheet(isPresented: $showSettings, onDismiss: {
+                // Started only once the sheet is fully gone, so the coachmarks measure and point at the
+                // real screen rather than at elements still covered by the sheet.
+                if replayOnboardingAfterSettings { replayOnboardingAfterSettings = false; startOnboarding() }
+            }) { NavigationStack { settings.navigationTitle("設定") } }
             .alert("削除しますか？", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
                 Button("キャンセル", role: .cancel) { pendingDelete = nil }
                 Button("削除", role: .destructive) {
@@ -412,6 +444,15 @@ struct ContentView: View {
                 Text(undoRedoUnavailableReason ?? "")
             }
         }
+        // Over the whole NavigationStack (not just the editor) so the coachmarks can point at toolbar
+        // buttons and the library too.
+        .overlay { coachmarkOverlay }
+        .alert("使い方の説明を終わります", isPresented: $showOnboardingFinish) {
+            Button("次回から表示しない") { onboardingDismissed = true }
+            Button("次回も表示する", role: .cancel) { onboardingDismissed = false }
+        } message: {
+            Text("次回の起動時から、この説明を表示しないようにしますか？\n設定の「使い方を見る」から、いつでも見られます。")
+        }
     }
 
     private var settings: some View {
@@ -431,6 +472,13 @@ struct ContentView: View {
                 Text("グリッド")
             } footer: {
                 Text("シンボル・メモ・テキストの配置・移動、配線の手動調整が、\(Int(GridSnap.spacing))pt間隔の格子に自動的に揃うようになります。")
+            }
+            Section("使い方") {
+                Button("使い方を見る", systemImage: "questionmark.circle") {
+                    replayOnboardingAfterSettings = true
+                    showSettings = false
+                }
+                .accessibilityIdentifier("settings-show-onboarding")
             }
             // Kept in its own section, at the very bottom, away from the harmless fields above - an
             // irreversible action deserves some distance from an accidental tap.
@@ -690,9 +738,10 @@ struct ContentView: View {
                     .accessibilityValue(twoFingerPanAttached ? "true" : "false")
                     .allowsHitTesting(false)
             }
-            .onAppear { viewportSize = proxy.size }
-            .onChange(of: proxy.size) { _, newValue in viewportSize = newValue }
+            .onAppear { viewportSize = proxy.size; centerInitiallyIfNeeded() }
+            .onChange(of: proxy.size) { _, newValue in viewportSize = newValue; centerInitiallyIfNeeded() }
         }
+        .reportsCoachmarkFrame(.canvas, into: $coachmarkFrames)
     }
 
     /// The on-canvas "倍率 n%" label doubles as the zoom menu's trigger (the toolbar used to carry a
@@ -712,6 +761,7 @@ struct ContentView: View {
         }
         .disabled(toolbarDisabled)
         .accessibilityIdentifier("zoom-menu")
+        .reportsCoachmarkFrame(.zoomIndicator, into: $coachmarkFrames)
     }
 
     private var canvasSize: CGSize { .init(width: 2_400, height: 1_800) }
@@ -1277,6 +1327,90 @@ struct ContentView: View {
         pushUndo()
         notes[i].anchor = point; notes[i].relateCorner = corner
     }
+    // MARK: Onboarding coachmarks (3D)
+    /// Runs the tour from its first step (first launch, or Settings' "使い方を見る"). Leaves every other mode
+    /// first, so no tool hint, edit badge or selection handle competes with the bubbles.
+    private func startOnboarding() {
+        editMode = false; tool = .select
+        selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil
+        linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
+        onboardingStep = OnboardingStep.allCases.first
+    }
+    private func advanceOnboarding() {
+        if let next = onboardingStep?.next { onboardingStep = next } else { finishOnboarding() }
+    }
+    /// Both the last "完了" and "スキップ" end here, with the "次回から表示しない" question.
+    private func finishOnboarding() {
+        onboardingStep = nil
+        showOnboardingFinish = true
+    }
+    @ViewBuilder private var coachmarkOverlay: some View {
+        if let step = onboardingStep {
+            GeometryReader { proxy in
+                let _ = coachmarkRemeasure   // re-read the UIKit toolbar frames after a layout change
+                let origin = proxy.frame(in: .global).origin
+                let target = step.targets.compactMap { CoachmarkToolbarLocator.frame(for: $0) ?? coachmarkFrames[$0] }
+                    .reduce(nil as CGRect?) { $0?.union($1) ?? $1 }
+                    .map { $0.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -6, dy: -6) }
+                let vertical = CoachmarkLayout.vertical(for: target, in: proxy.size)
+                let width = CoachmarkLayout.width(in: proxy.size)
+                let leading = CoachmarkLayout.leading(for: target, in: proxy.size)
+                let arrow: CoachmarkBubble.Arrow = switch vertical { case .below: .up; case .above: .down; case .center: .none }
+                let bubble = CoachmarkBubble(step: step, arrow: arrow, arrowX: (target?.midX ?? 0) - leading, width: width,
+                                             onNext: advanceOnboarding, onSkip: finishOnboarding)
+                ZStack(alignment: .topLeading) {
+                    // Blocks every touch beneath, the highlighted hole included: the tour only explains, it
+                    // does not let the user start a tool half-way through it.
+                    ScrimWithHole(hole: target ?? .zero)
+                        .fill(Color.black.opacity(0.5), style: FillStyle(eoFill: true))
+                        .contentShape(Rectangle())
+                        .onTapGesture {}
+                        .accessibilityIdentifier("coachmark-scrim")
+                    if let target {
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.accentColor, lineWidth: 3)
+                            .frame(width: target.width, height: target.height)
+                            .offset(x: target.minX, y: target.minY)
+                            .allowsHitTesting(false)
+                    }
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: leading, height: 1).allowsHitTesting(false)
+                        VStack(spacing: 0) {
+                            switch vertical {
+                            case .below(let top):
+                                Color.clear.frame(height: top).allowsHitTesting(false)
+                                bubble
+                                Spacer(minLength: 0)
+                            case .above(let bottomInset):
+                                Spacer(minLength: 0)
+                                bubble
+                                Color.clear.frame(height: bottomInset).allowsHitTesting(false)
+                            case .center:
+                                Spacer(minLength: 0)
+                                bubble
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    // Hidden exposure of the highlighted rect (overlay-local), so a UI test can check that the
+                    // bubble sits next to its target without comparing screenshots.
+                    Text("target").font(.system(size: 1)).opacity(0.01)
+                        .accessibilityIdentifier("coachmark-target")
+                        .accessibilityValue(target.map { "x=\(Int($0.minX));y=\(Int($0.minY));w=\(Int($0.width));h=\(Int($0.height))" } ?? "none")
+                        .allowsHitTesting(false)
+                }
+                // The toolbar locator reads UIKit layout, which can settle after this view's own size
+                // changes (rotation, split view) - so look again once it has.
+                .task(id: proxy.size) {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    coachmarkRemeasure &+= 1
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
     // MARK: Live editing on the canvas (5D)
     /// Leaves inspectorSessionPushed untouched: the live-edit round trip (dismiss the sheet, type, come back)
     /// must not itself start or end an Undo batch - that is still governed purely by whichever discrete
@@ -1572,12 +1706,15 @@ struct ContentView: View {
         reroute()
         centerViewportOnCanvas()
     }
+    /// Launch starts blank and centered (feedback, 2026-09-29) - once, as soon as the viewport has a real
+    /// size. Skipped when a UI test seeded the sample circuit, which assumes the old top-left launch view.
+    private func centerInitiallyIfNeeded() {
+        guard !didInitialCenter, !seedsSampleCircuit, viewportSize != .zero else { return }
+        didInitialCenter = true
+        centerViewportOnCanvas()
+    }
     /// Shows the canvas's own center, not its top-left corner - easier to start drawing in any direction
-    /// (feedback, 2026-09-29). Only called on reset, not on every launch: the seed diagram sits in the
-    /// canvas's upper-left quadrant, and dozens of existing UI tests assume it is on screen at launch
-    /// (scale=1, offset=0) - centering there would scroll it out of view and need a much larger rewrite. A
-    /// freshly reset (blank) canvas has nothing at risk of scrolling away, so centering only then gets the
-    /// requested "easy to start drawing" feel without that cost.
+    /// (feedback, 2026-09-29). Used at launch and on reset.
     private func centerViewportOnCanvas() {
         guard viewportSize != .zero else { return }
         let canvasCenter = CGPoint(x: canvasSize.width/2, y: canvasSize.height/2)
