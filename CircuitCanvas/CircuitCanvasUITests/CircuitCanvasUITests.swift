@@ -3061,7 +3061,7 @@ final class CircuitCanvasUITests: XCTestCase {
             return size.count == 2 ? CGRect(x: origin.x, y: origin.y, width: size[0], height: size[1]) : .null
         }
         let targets: [() -> [CGRect]] = [
-            { [self.element(app, "library-category-電源").frame, self.element(app, "library-category-テキスト").frame] },
+            { [self.element(app, "library-panel").frame] },
             { [app.buttons["配線"].frame, app.buttons["＋シンボル"].frame, app.buttons["＋メモ"].frame] },
             { [visibleCanvasRect()] },
             { [app.buttons["確認"].frame] },
@@ -3130,7 +3130,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3), "O5: 使い方を見る replays the tour")
         XCTAssertFalse(app.navigationBars["設定"].exists, "and closes Settings first, so the tour points at the real screen")
         XCTAssertEqual(element(app, "coachmark-progress").label, "1 / 5")
-        assertBubbleIsNextToItsTarget(app, step: "replay 1", expected: [element(app, "library-category-電源").frame])
+        assertBubbleIsNextToItsTarget(app, step: "replay 1", expected: [element(app, "library-panel").frame])
         app.buttons["coachmark-next"].tap()
         XCTAssertEqual(element(app, "coachmark-progress").label, "2 / 5")
         app.buttons["coachmark-skip"].tap()

@@ -303,6 +303,10 @@ struct ContentView: View {
                     Divider()
                     libraryView.frame(height: 132)
                         .reportsCoachmarkFrame(.library, into: $coachmarkFrames)
+                        // A container (children stay individually reachable), so a UI test can compare the
+                        // coachmark's highlight against the whole library panel.
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("library-panel")
                 }
             }
             .navigationTitle(canvasName)
