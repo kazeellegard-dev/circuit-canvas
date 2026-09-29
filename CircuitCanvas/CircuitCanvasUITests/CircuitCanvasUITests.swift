@@ -1392,6 +1392,42 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["始点のピンをタップ"].exists,"a background tap near a grouped symbol's pin must not start a wire either")
     }
 
+    /// A short default "テキスト" is well within the old fixed 160x40 approximation's own half-width (80pt),
+    /// so a marquee reaching only a MUCH longer text's real far edge - well past that old half-width - could
+    /// only ever select it via the real measured frame (TextFramesKey/canvasRect), not the fixed guess it
+    /// replaced (Codex minor, 5E round 2: the mixed-group test's default-length text left this fix itself
+    /// unverified, since the old approximation would have matched it too).
+    @MainActor
+    func testGroupSelectionMarqueeUsesATextItemsRealMeasuredWidthNotAFixedApproximation() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:300,dy:500)).tap()
+        element(app,"text-テキスト").tap()
+        app.buttons["確認"].tap()
+        app.buttons["text-body-editor"].tap()
+        let field = app.textViews["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+        field.tap(); field.tap()
+        let longBody = String(repeating:"テキスト", count:10)
+        field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:20) + longBody)
+        app.buttons["live-edit-done"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        // A tap's cursor landing position inside a multiline field is layout/device-sensitive (documented
+        // elsewhere in this file), so the typed text is not guaranteed to land at the very start - matching
+        // by CONTAINS, then reading back the element's own real identifier, avoids assuming exact placement.
+        let longTextElement = app.descendants(matching: .any).matching(NSPredicate(format:"identifier CONTAINS %@", longBody)).firstMatch
+        XCTAssertTrue(longTextElement.waitForExistence(timeout:2))
+        let longIdentifier = longTextElement.identifier
+
+        // A thin strip 300-340pt to the right of the text's own center (300,500) - well beyond where the old
+        // fixed approximation's half-width (80pt) could ever reach, but within this much longer text's real
+        // rendered extent.
+        groupViaMarquee(app, from: CGVector(dx:600,dy:480), to: CGVector(dx:640,dy:520))
+        XCTAssertFalse((element(app,"\(longIdentifier)-group").value as? String ?? "").isEmpty,
+                       "a marquee reaching only the far edge of a long text's REAL width must still select it")
+    }
+
     /// Covers a group mixing all three item types, with a wire reaching OUTSIDE the group to an ungrouped
     /// symbol - the original 6 tests were all-symbol groups only (Codex major, 5E round 1).
     @MainActor
@@ -1497,6 +1533,11 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(pin("抵抗")[1], beforeMoveA[1], accuracy:2)
         XCTAssertEqual(pin("コンデンサ")[0], beforeMoveB[0], accuracy:2, "and the OTHER member's position too, in the same single undo step")
         XCTAssertEqual(pin("コンデンサ")[1], beforeMoveB[1], accuracy:2)
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(pin("抵抗")[0]-beforeMoveA[0], 30, accuracy:2, "redo must reapply the move to the dragged member")
+        XCTAssertEqual(pin("コンデンサ")[0]-beforeMoveB[0], 30, accuracy:2, "and to the other member, in the same single redo step")
+        app.buttons["undo-button"].tap()   // back to pre-move, to continue with delete below
+        XCTAssertEqual(pin("抵抗")[0], beforeMoveA[0], accuracy:2)
 
         // Delete the group, then Undo/Redo that.
         app.buttons["edit-mode-toggle"].tap()
