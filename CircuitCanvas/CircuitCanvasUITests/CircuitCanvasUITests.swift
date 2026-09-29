@@ -2787,10 +2787,14 @@ final class CircuitCanvasUITests: XCTestCase {
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:800)).tap()
         let text = element(app,"text-テキスト")
         XCTAssertTrue(text.waitForExistence(timeout:2))
+        let textBefore = position(text.value as? String)
         let textStart = text.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         textStart.press(forDuration:0.2,thenDragTo:textStart.withOffset(CGVector(dx:23,dy:37)))
         let textAfter = position(text.value as? String)
-        XCTAssertTrue(onFifteenPointGrid(textAfter[0]) && onFifteenPointGrid(textAfter[1]), "a dragged text item must land on the 15pt grid: \(textAfter)")
+        // Placement already snapped it, so "on the grid" alone would pass without any drag at all - check
+        // it reached the grid point nearest to where it was released (Codex minor, 5F round 2).
+        XCTAssertEqual(textAfter[0], ((textBefore[0]+23)/15).rounded()*15, accuracy: 0.5, "a dragged text item must land on the nearest grid point: \(textBefore) -> \(textAfter)")
+        XCTAssertEqual(textAfter[1], ((textBefore[1]+37)/15).rounded()*15, accuracy: 0.5)
     }
 
     @MainActor
@@ -2835,28 +2839,39 @@ final class CircuitCanvasUITests: XCTestCase {
     /// lines (30pt) away, towards the wire's middle - well over the segment gesture's 4pt minimum, so a drag that never happened cannot
     /// pass - and checks where it ends up: on that exact line with snapping on, 3pt off it with snapping off.
     @MainActor
-    private func dragWireSegments(snap: Bool) {
+    private func dragWireSegments(snap: Bool, horizontal wanted: Bool) {
         let app = makeApp(gridSnap: snap); app.launch()
         // A fresh, isolated connection - not one of the seed wires, whose steps sit close enough together
-        // for WireRouting's step-straightening alignment to take over.
-        place(app, category:"受動部品", name:"抵抗", x:300, y:700)
-        place(app, category:"受動部品", name:"コンデンサ", x:600, y:850)
-        app.buttons["配線"].tap()
-        app.buttons["symbol-抵抗-pin-1"].tap()
-        app.buttons["symbol-コンデンサ-pin-0"].tap()
+        // for WireRouting's step-straightening alignment to take over. Side-by-side pins route through a
+        // vertical middle segment; a top pin to a bottom pin (as in testVerticalPowerSegmentDragBranchAndRotation)
+        // through a horizontal one.
+        if wanted {
+            place(app,category:"電源",name:"直流電源",x:300,y:530)
+            place(app,category:"電源",name:"GND",x:650,y:530)
+            app.buttons["配線"].tap()
+            app.buttons["symbol-直流電源-pin-1"].tap()
+            app.buttons["symbol-GND-pin-0"].tap()
+        } else {
+            place(app, category:"受動部品", name:"抵抗", x:300, y:700)
+            place(app, category:"受動部品", name:"コンデンサ", x:600, y:850)
+            app.buttons["配線"].tap()
+            app.buttons["symbol-抵抗-pin-1"].tap()
+            app.buttons["symbol-コンデンサ-pin-0"].tap()
+        }
 
         let initial = routePoints(app,3)
         let interior = initial.count > 3 ? Array(1..<(initial.count-2)) : []
-        let firstOfEach = [true, false].compactMap { horizontal in interior.first { (initial[$0].y == initial[$0+1].y) == horizontal } }
-        XCTAssertFalse(firstOfEach.isEmpty, "expected an interior (draggable) segment on the new wire: \(initial)")
-        for segment in firstOfEach {
+        guard let firstWanted = interior.first(where: { (initial[$0].y == initial[$0+1].y) == wanted }) else {
+            return XCTFail("expected an interior \(wanted ? "horizontal" : "vertical") segment on the new wire: \(initial)")
+        }
+        for segment in [firstWanted] {
             let before = routePoints(app,3)
             let horizontal = before[segment].y == before[segment+1].y
             let from = horizontal ? before[segment].y : before[segment].x
-            // Towards the middle of the wire: the other way would soon shorten a pin's lead-out below its
-            // minimum, which WireRouting.moved refuses - leaving the segment where it was.
-            let middle = horizontal ? (before.first!.y+before.last!.y)/2 : (before.first!.x+before.last!.x)/2
-            let direction: CGFloat = middle < from ? -1 : 1
+            // Vertical: towards the middle of the wire - the other way would soon shorten a pin's lead-out
+            // below its minimum, which WireRouting.moved refuses, leaving the segment where it was.
+            // Horizontal: downwards, away from the two symbols the segment runs between.
+            let direction: CGFloat = horizontal ? 1 : ((before.first!.x+before.last!.x)/2 < from ? -1 : 1)
             let gridLine = (from/15).rounded()*15 + 30*direction
             let amount = gridLine + 3*direction - from
             let target = element(app,"wire-3-segment-\(segment)")
@@ -2878,12 +2893,34 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testDraggingAWireSegmentSnapsItsSharedCoordinateToTheGridOnRelease() throws {
-        dragWireSegments(snap: true)
+        dragWireSegments(snap: true, horizontal: false)
+        dragWireSegments(snap: true, horizontal: true)
     }
 
     @MainActor
     func testDraggingAWireSegmentWithGridSnapOffKeepsTheReleasedCoordinate() throws {
-        dragWireSegments(snap: false)
+        dragWireSegments(snap: false, horizontal: false)
+        dragWireSegments(snap: false, horizontal: true)
+    }
+
+    /// The grid wins over step-straightening (user decision, 2026-09-29; Codex major, 5F round 2). Seed
+    /// wire 2's step (x = 289 and 301, both off the grid) straightens onto 289 with snapping off
+    /// (testDraggingOneSideOfAStepStraightensTheWire); with it on, the same -10pt drag - which passes within
+    /// alignSnap of 289, and so straightens mid-drag - must still be released onto the grid line 285.
+    @MainActor
+    func testWithGridSnapOnAReleasedSegmentLandsOnTheGridNotOnAnOffGridNeighbour() throws {
+        let app = makeApp(gridSnap: true); app.launch()
+        let before = routePoints(app,2)
+        guard before.count == 6 else { return XCTFail("wire 2 should start with a step: \(before)") }
+        XCTAssertEqual(before[1].x,289); XCTAssertEqual(before[3].x,301)
+        XCTAssertTrue(element(app,"wire-2-segment-3").waitForExistence(timeout:2))
+        let side = element(app,"wire-2-segment-3").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        side.press(forDuration:0.2,thenDragTo:side.withOffset(CGVector(dx:-10,dy:0)))
+        let after = routePoints(app,2)
+        guard after.count == 6 else { return XCTFail("the dragged side must stay its own segment, on the grid: \(after)") }
+        XCTAssertEqual(after[3].x,285); XCTAssertEqual(after[4].x,285)
+        XCTAssertEqual(after[1].x,289,"the other, untouched side of the step stays put")
+        XCTAssertEqual(after.first,before.first); XCTAssertEqual(after.last,before.last)
     }
 
     /// A group whose members both start off the grid (the seed "CAN" block at 620,250 and the seed note at

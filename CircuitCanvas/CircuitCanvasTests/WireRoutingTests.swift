@@ -387,6 +387,16 @@ struct WireRoutingTests {
         #expect(far == [p(0,0),p(100,0),p(100,80),p(70,80),p(70,200),p(300,200)])
     }
 
+    /// Grid snapping (5F) moves by exactly the grid-snapped amount: a neighbour within 13pt must not pull it
+    /// off the grid line, but one landed on exactly still merges.
+    @Test func withoutNeighbourAlignmentAMoveLandsExactlyWhereAsked() {
+        // x = 110 -> 105: the neighbour at 100 is 5pt away, well within alignSnap, yet is not taken.
+        let exact = WireRouting.moved(stepped,segment:3,delta:-5,bodies:[],alignToNeighbours:false)
+        #expect(exact == [p(0,0),p(100,0),p(100,80),p(105,80),p(105,200),p(300,200)])
+        let onto = WireRouting.moved(stepped,segment:3,delta:-10,bodies:[],alignToNeighbours:false)
+        #expect(onto == [p(0,0),p(100,0),p(100,200),p(300,200)])
+    }
+
     @Test func aStraightenedRouteHasNoZeroLengthOrCollinearSegments() {
         for delta in stride(from:-20.0,through:20.0,by:1.0) {
             let path = WireRouting.moved(stepped,segment:3,delta:CGFloat(delta),bodies:[])

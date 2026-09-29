@@ -764,7 +764,7 @@ struct ContentView: View {
                         .accessibilityValue(pointValue(WireRouting.junctions(wires.map(\.points))))
                 }
                 ForEach(Array(wires.enumerated()), id: \.element.id) { index, wire in
-                    ForEach(interiorSegments(wire.points), id: \.self) { segment in
+                    ForEach(interiorSegments(segmentTargetPoints(wire)), id: \.self) { segment in
                         segmentTarget(wire: wire, index: index, segment: segment)
                     }
                 }
@@ -1933,8 +1933,17 @@ struct ContentView: View {
     private func wireHops(_ index: Int) -> [WireRouting.Crossing] {
         WireRouting.crossings(wires[index].points, others: wires.enumerated().filter { $0.offset != index }.map { $0.element.points })
     }
+    /// While one of this wire's segments is being dragged, its targets stay laid out on the route the drag
+    /// started from: a drag that straightens a step shortens the live route, and the dragged segment's own
+    /// target view (which owns the gesture) would otherwise disappear mid-drag - cancelling the gesture
+    /// without ever calling its onEnded, so the release never snapped and segmentDrag was never cleared.
+    private func segmentTargetPoints(_ wire: WireItem) -> [CGPoint] {
+        if let drag = segmentDrag, drag.wireID == wire.id { return drag.origin }
+        return wire.points
+    }
     private func segmentTarget(wire: WireItem, index: Int, segment: Int) -> some View {
-        let a = wire.points[segment], b = wire.points[segment+1]
+        let points = segmentTargetPoints(wire)
+        let a = points[segment], b = points[segment+1]
         let horizontal = a.y == b.y
         // Reduce target overlap at corners. Touch delivery can still favor a
         // neighbor, so the gesture resolves the nearest visible segment below.
@@ -2008,17 +2017,15 @@ struct ContentView: View {
     private func endSegmentDrag() {
         defer { segmentDrag = nil }
         guard gridSnapEnabled, let drag = segmentDrag, let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
-        // A drag that straightened a step (WireRouting.moved aligned it onto a neighbouring parallel line and
-        // simplified the route) is kept as is, even if that line is off the grid: removing the step is the
-        // whole point of 5F, and snapping would only re-open it.
-        guard wires[i].points.count == drag.origin.count else { return }
         // Re-applied to the drag's own starting route (Codex major, 5F round 1), where drag.segment is
         // guaranteed to still index the dragged segment, rather than nudging the current, already-moved one.
+        // The grid wins over WireRouting's pull onto a nearby parallel line (user decision, 2026-09-29): an
+        // older, off-grid neighbour may leave a small step, but the released segment is always on the grid.
+        // A neighbour that is itself on the grid line still merges with it (moved() simplifies the route).
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let start = horizontal ? drag.origin[drag.segment].y : drag.origin[drag.segment].x
         let snappedDelta = GridSnap.scalar(start + drag.delta) - start
-        guard snappedDelta != drag.delta else { return }
-        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: snappedDelta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: snappedDelta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)), alignToNeighbours: false)
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }

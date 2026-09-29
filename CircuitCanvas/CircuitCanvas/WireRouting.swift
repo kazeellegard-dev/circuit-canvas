@@ -249,7 +249,10 @@ enum WireRouting {
         return nearest
     }
 
-    static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect], minimumTerminalLead: CGFloat = 0) -> [CGPoint] {
+    /// `alignToNeighbours: false` moves by exactly `delta` (still limited by bodies and terminal leads) without
+    /// the `alignSnap` pull onto a neighbouring parallel line - grid snapping (5F) uses it so a release always
+    /// lands on the grid line it targeted, never on a nearby off-grid one.
+    static func moved(_ path: [CGPoint], segment: Int, delta: CGFloat, bodies: [CGRect], minimumTerminalLead: CGFloat = 0, alignToNeighbours: Bool = true) -> [CGPoint] {
         guard segment > 0, segment+1 < path.count-1 else { return path }
         let horizontal = path[segment].y == path[segment+1].y
         func candidate(_ amount: CGFloat) -> [CGPoint] {
@@ -290,7 +293,7 @@ enum WireRouting {
         var delta = delta
         let current = coordinate(segment)
         let neighbours = [segment - 2, segment + 2].filter { $0 >= 0 && $0 + 1 < path.count }.map(coordinate)
-        if let target = neighbours.min(by: { abs($0 - (current + delta)) < abs($1 - (current + delta)) }),
+        if alignToNeighbours, let target = neighbours.min(by: { abs($0 - (current + delta)) < abs($1 - (current + delta)) }),
            abs(target - (current + delta)) <= alignSnap {
             delta = target - current
         }
