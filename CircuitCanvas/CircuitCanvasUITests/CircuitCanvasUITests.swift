@@ -3007,12 +3007,17 @@ final class CircuitCanvasUITests: XCTestCase {
     }
     /// The bubble must sit right next to (above or below) the element it describes, and overlap it
     /// horizontally - or, for a target too tall to leave room on either side, sit on top of it.
-    @MainActor private func assertBubbleIsNextToItsTarget(_ app: XCUIApplication, step: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// `expected`: the real elements (as XCUITest itself locates them) the highlight must cover - so a
+    /// locator that found the wrong view cannot pass just because the bubble sits next to whatever it found.
+    @MainActor private func assertBubbleIsNextToItsTarget(_ app: XCUIApplication, step: String, expected: [XCUIElement], file: StaticString = #filePath, line: UInt = #line) {
         let bubble = element(app, "coachmark").frame
         guard let target = rect(element(app, "coachmark-target").value) else {
             return XCTFail("step \(step): no highlighted target (\(String(describing: element(app, "coachmark-target").value)))", file: file, line: line)
         }
-        XCTAssertGreaterThan(target.width, 20, "step \(step): the target must be a real element, not a placeholder", file: file, line: line)
+        XCTAssertFalse(expected.isEmpty, "step \(step): name the element(s) the highlight must cover", file: file, line: line)
+        for element in expected {
+            XCTAssertTrue(target.insetBy(dx: -2, dy: -2).contains(element.frame), "step \(step): highlight \(target) must cover \(element.identifier.isEmpty ? element.label : element.identifier) \(element.frame)", file: file, line: line)
+        }
         XCTAssertTrue(bubble.minX < target.maxX && bubble.maxX > target.minX, "step \(step): bubble \(bubble) must overlap target \(target) horizontally", file: file, line: line)
         let gap = min(abs(bubble.minY - target.maxY), abs(target.minY - bubble.maxY))
         XCTAssertTrue(gap <= 20 || target.contains(bubble), "step \(step): bubble \(bubble) must be next to target \(target)", file: file, line: line)
@@ -3042,12 +3047,19 @@ final class CircuitCanvasUITests: XCTestCase {
         let bubble = element(app, "coachmark")
         XCTAssertTrue(bubble.waitForExistence(timeout: 3), "O1: the tour starts by itself on a first launch")
         let titles = ["ライブラリ", "追加と配線", "キャンバス", "確認（インスペクタ）", "拡大・縮小と移動"]
+        let targets: [[XCUIElement]] = [
+            [element(app, "library-category-電源"), element(app, "library-category-テキスト")],
+            [app.buttons["配線"], app.buttons["＋シンボル"], app.buttons["＋メモ"]],
+            [element(app, "circuit-canvas")],
+            [app.buttons["確認"]],
+            [app.buttons["zoom-menu"]]
+        ]
         for (index, title) in titles.enumerated() {
             let progress = element(app, "coachmark-progress")
             XCTAssertTrue(progress.waitForExistence(timeout: 2))
             XCTAssertEqual(progress.label, "\(index + 1) / \(titles.count)")
             XCTAssertEqual(element(app, "coachmark-title").label, title)
-            assertBubbleIsNextToItsTarget(app, step: title)
+            assertBubbleIsNextToItsTarget(app, step: title, expected: targets[index])
             XCTAssertEqual(app.buttons["coachmark-next"].label, index == titles.count - 1 ? "完了" : "次へ")
             app.buttons["coachmark-next"].tap()
         }
@@ -3105,7 +3117,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(element(app, "coachmark").waitForExistence(timeout: 3), "O5: 使い方を見る replays the tour")
         XCTAssertFalse(app.navigationBars["設定"].exists, "and closes Settings first, so the tour points at the real screen")
         XCTAssertEqual(element(app, "coachmark-progress").label, "1 / 5")
-        assertBubbleIsNextToItsTarget(app, step: "replay 1")
+        assertBubbleIsNextToItsTarget(app, step: "replay 1", expected: [element(app, "library-category-電源")])
         app.buttons["coachmark-next"].tap()
         XCTAssertEqual(element(app, "coachmark-progress").label, "2 / 5")
         app.buttons["coachmark-skip"].tap()
