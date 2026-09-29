@@ -72,6 +72,16 @@ private struct LiveEditCardFrameKey: PreferenceKey {
         if let next = nextValue() { value = next }
     }
 }
+/// Every text item's own real, currently-laid-out frame, in canvas space, keyed by id - a text item has no
+/// fixed size of its own (its bounds follow its content), so grouping's marquee hit-test and a selected
+/// group's own bounding box (both 5E) need the real measured frame, not a one-size-fits-all guess that a
+/// short text leaves mostly empty and a long or multi-line one overflows (Codex major, 5E round 1).
+private struct TextFramesKey: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
 /// The live-edit input card's fixed chrome and minimum usable field size - shared by `liveEditCard` (which
 /// renders it) and `liveEditCardPlacement` (which decides how far it may shrink before that would produce a
 /// card smaller than this view can actually render, and so a "shrink to fit" that quietly overlapped the
@@ -225,6 +235,8 @@ struct ContentView: View {
     /// Which group a drag on one of its members is currently moving - gates a single pushUndo per drag
     /// gesture, mirroring dragOrigins/noteDragOrigins/textDragOrigins' own per-item gating (see moveGroup).
     @State private var groupDragActive: UUID?
+    /// Every text item's own real frame, in canvas space, via TextFramesKey - see that key's own doc comment.
+    @State private var textCanvasFrames: [UUID: CGRect] = [:]
     @State private var liveEdit: LiveEditTarget?
     /// The current live-edit target's measured real frame, via LiveEditFrameKey - nil until the first layout
     /// pass reports it (or if the target does not need measuring - a block symbol's title, and a note's
@@ -495,6 +507,16 @@ struct ContentView: View {
                     .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
                     .scaleEffect(canvasScale, anchor: .topLeading)
                     .offset(canvasOffset)
+                if tool == .group {
+                    // Sits above canvasContent, like relate-target-capture right below, so a marquee drag
+                    // reaches it even when it starts on top of an item (Codex major, 5E round 1) - see
+                    // groupSelectionGesture's own doc comment for why a branch inside canvasPanGesture (on
+                    // the Color.clear BELOW canvasContent, above) could not do this.
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(groupSelectionGesture)
+                        .accessibilityIdentifier("group-selection-capture")
+                }
                 if pendingRelateFrom != nil {
                     // While waiting for the relate target tap, any point on the canvas must resolve to
                     // setAnchor - even one over a note/symbol card, which would otherwise consume the tap
@@ -752,7 +774,12 @@ struct ContentView: View {
                         .position(symbol.position)
                         .onTapGesture(perform: selectSymbol)
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                            // In group-selection mode this must NOT claim the touch at all - a marquee that
+                            // starts on top of an item needs the drag to reach canvasPanGesture underneath
+                            // instead (Codex major, 5E round 1). An effectively-unreachable minimumDistance
+                            // (rather than removing the .highPriorityGesture conditionally, which SwiftUI has
+                            // no clean way to do) means this recognizer simply never wins the priority contest.
+                            DragGesture(minimumDistance: tool == .group ? 10000 : 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
                                     guard !editMode, liveEdit == nil, tool != .group else { return }
                                     let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
@@ -862,7 +889,8 @@ struct ContentView: View {
                     )
                         .position(note.position)
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                            // See the matching comment on SymbolCard's own drag (Codex major, 5E round 1).
+                            DragGesture(minimumDistance: tool == .group ? 10000 : 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
                                     guard !editMode, liveEdit == nil, tool != .group else { return }
                                     let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
@@ -985,13 +1013,20 @@ struct ContentView: View {
                         // Measures the card's own real, content-sized layout (Codex major, 5D round 2: the
                         // fixed 220x80 hole approximation didn't track long or multi-line text). Emitting nil
                         // for every text item except the one currently live-edited is harmless - see label's
-                        // matching comment in SymbolCard.
+                        // matching comment in SymbolCard. Also feeds textCanvasFrames (5E) - every text's own
+                        // real frame, converted to canvas space, used for marquee hit-testing and a group's
+                        // own bounding box, instead of a fixed 160x40 approximation that a short text leaves
+                        // mostly empty and a long or multi-line one overflows (Codex major, 5E round 1).
                         .background(GeometryReader { proxy in
-                            Color.clear.preference(key: LiveEditFrameKey.self, value: liveEdit == .textBody(text.id) ? proxy.frame(in: .named("editorViewport")) : nil)
+                            let viewportFrame = proxy.frame(in: .named("editorViewport"))
+                            Color.clear
+                                .preference(key: LiveEditFrameKey.self, value: liveEdit == .textBody(text.id) ? viewportFrame : nil)
+                                .preference(key: TextFramesKey.self, value: [text.id: canvasRect(from: viewportFrame)])
                         })
                         .position(text.position)
                         .highPriorityGesture(
-                            DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+                            // See the matching comment on SymbolCard's own drag (Codex major, 5E round 1).
+                            DragGesture(minimumDistance: tool == .group ? 10000 : 4, coordinateSpace: .named("editorViewport"))
                                 .onChanged { value in
                                     guard !editMode, liveEdit == nil, tool != .group else { return }
                                     let translation = CGSize(width:value.translation.width/canvasScale,height:value.translation.height/canvasScale)
@@ -1060,6 +1095,7 @@ struct ContentView: View {
                 }
             }
             .onPreferenceChange(LiveEditFrameKey.self) { liveEditMeasuredFrame = $0 }
+            .onPreferenceChange(TextFramesKey.self) { textCanvasFrames = $0 }
     }
     /// `size` is the card's outer footprint, exactly as liveEditCardPlacement computed it (shrunk from the
     /// preferred size when space was tight) - the field itself is sized to fit inside that, so the card
@@ -1104,7 +1140,10 @@ struct ContentView: View {
                 // minor, 4A round 1).
                 else if linkingNote != nil { linkingNote = nil }
                 else if editMode { selectedNote = nil; selectedSymbol = nil; selectedText = nil; selectedGroup = nil }
-                else if tool == .wire, let pin = nearestPin(to: point) {
+                // A grouped symbol's pins cannot be reconnected via a background tap near one either - not
+                // only a direct tap on the pin itself, which SymbolCard's own selectPin already blocks
+                // (Codex major, 5E round 1).
+                else if tool == .wire, let pin = nearestPin(to: point), groupID(ownerOfPin: pin) == nil {
                     selectWirePin(pin)
                 }
                 else if tool == .note { pushUndo(); notes.append(.init(type: .memo, title: "新しいメモ", body: "内容を入力", position: point)); selectedNote = notes.last?.id; selectedSymbol = nil; selectedText = nil; selectedGroup = nil; tool = .select }
@@ -1554,19 +1593,6 @@ struct ContentView: View {
                 // scrim above it already blocks most of these, but a touch that starts outside canvasSize
                 // (in the "outside the canvas" margin) reaches this gesture directly, without the scrim.
                 guard liveEdit == nil else { return }
-                // Group-selection mode (5E) draws a marquee instead of panning or dragging a wire segment;
-                // handled first and returns, so none of the branches below run while it is active.
-                if tool == .group {
-                    let start = canvasPoint(from: value.startLocation)
-                    let current = canvasPoint(from: value.location)
-                    let rect = CGRect(x: min(start.x, current.x), y: min(start.y, current.y),
-                                       width: abs(current.x - start.x), height: abs(current.y - start.y))
-                    groupSelectionRect = rect
-                    // "一部でも重なった...強調色になる": any item whose own bounds merely intersect the
-                    // marquee, not only ones fully enclosed by it.
-                    groupSelectionCandidates = Set(allMembers().filter { member in bounds(for: member).map { $0.intersects(rect) } ?? false })
-                    return
-                }
                 // Very short transparent targets can deliver the touch to this
                 // background. Resolve once at touch-down and retain that choice.
                 if segmentDrag == nil && !isPanningCanvas {
@@ -1585,15 +1611,34 @@ struct ContentView: View {
                 )
             }
             .onEnded { _ in
-                if tool == .group {
-                    if !groupSelectionCandidates.isEmpty { pendingGroupConfirm = groupSelectionCandidates }
-                    groupSelectionRect = nil
-                    groupSelectionCandidates = []
-                    return
-                }
                 if activePanSource == .singleFinger { canvasPanOrigin = canvasOffset; activePanSource = nil }
                 segmentDrag = nil
                 isPanningCanvas = false
+            }
+    }
+    /// Group-selection mode's own marquee (5E) - a dedicated capture layer (see its use in `editor`, right
+    /// after canvasContent) rather than a branch inside canvasPanGesture above: that gesture is attached to a
+    /// Color.clear BELOW canvasContent, so a drag starting on top of an item was claimed by that item's own
+    /// (higher, since it renders after) drag gesture before ever reaching it - exactly the same problem
+    /// `relate-target-capture` (right below this layer's own use) already exists to solve for the relate
+    /// flow's target tap (Codex major, 5E round 1: the previous in-canvasPanGesture version could only ever
+    /// start a marquee from a point with nothing else underneath it).
+    private var groupSelectionGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("editorViewport"))
+            .onChanged { value in
+                let start = canvasPoint(from: value.startLocation)
+                let current = canvasPoint(from: value.location)
+                let rect = CGRect(x: min(start.x, current.x), y: min(start.y, current.y),
+                                   width: abs(current.x - start.x), height: abs(current.y - start.y))
+                groupSelectionRect = rect
+                // "一部でも重なった...強調色になる": any item whose own bounds merely intersect the marquee,
+                // not only ones fully enclosed by it.
+                groupSelectionCandidates = Set(allMembers().filter { member in bounds(for: member).map { $0.intersects(rect) } ?? false })
+            }
+            .onEnded { _ in
+                if !groupSelectionCandidates.isEmpty { pendingGroupConfirm = groupSelectionCandidates }
+                groupSelectionRect = nil
+                groupSelectionCandidates = []
             }
     }
     private var canvasZoomGesture: some Gesture {
@@ -1602,6 +1647,12 @@ struct ContentView: View {
             .onEnded { _ in canvasScaleOrigin = canvasScale }
     }
     private func canvasPoint(from point: CGPoint) -> CGPoint { .init(x: (point.x - canvasOffset.width) / canvasScale, y: (point.y - canvasOffset.height) / canvasScale) }
+    /// The inverse of the scale/offset transform every card's own `.position(...)` already applies - converts
+    /// a rect measured in viewport space (see TextFramesKey) back into the canvas-space coordinates
+    /// bounds(for:)/groupBounds and the marquee's own hit-testing already work in.
+    private func canvasRect(from viewportRect: CGRect) -> CGRect {
+        CGRect(origin: canvasPoint(from: viewportRect.origin), size: CGSize(width: viewportRect.width/canvasScale, height: viewportRect.height/canvasScale))
+    }
     private func boundedCanvasOffset(_ proposed: CGSize, in viewportSize: CGSize) -> CGSize {
         let minimumVisible: CGFloat = 200
         let scaledWidth = canvasSize.width * canvasScale
@@ -1662,6 +1713,15 @@ struct ContentView: View {
     private func groupID(ofSymbol id: UUID) -> UUID? { groupID(containing: .symbol(id)) }
     private func groupID(ofNote id: UUID) -> UUID? { groupID(containing: .note(id)) }
     private func groupID(ofText id: UUID) -> UUID? { groupID(containing: .text(id)) }
+    /// Which group (if any) owns the symbol a given pin point belongs to - used to block reconnecting a
+    /// grouped symbol's wiring via a background tap near its pin, not just a direct tap on the pin itself
+    /// (which SymbolCard's own selectPin already blocks) (Codex major, 5E round 1).
+    private func groupID(ownerOfPin pin: CGPoint) -> UUID? {
+        for symbol in symbols where pins(for: symbol).contains(where: { $0.distance(to: pin) < 1 }) {
+            return groupID(ofSymbol: symbol.id)
+        }
+        return nil
+    }
     /// A member's own bounds, in canvas space - used both for marquee hit-testing ("一部でも重なった" per this
     /// task) and for a selected group's own outline. A text item has no fixed size of its own; a generous
     /// fixed approximation is fine here, since neither use needs pixel precision.
@@ -1675,6 +1735,9 @@ struct ContentView: View {
             return CGRect(x: note.position.x - note.size.width/2, y: note.position.y - note.size.height/2, width: note.size.width, height: note.size.height)
         case .text(let id):
             guard let text = texts.first(where: { $0.id == id }) else { return nil }
+            // Real measured frame (textCanvasFrames) once the first layout pass has reported it; a fixed
+            // approximation only for the one render before that arrives (Codex major, 5E round 1).
+            if let measured = textCanvasFrames[id] { return measured }
             let approximateSize = CGSize(width: 160, height: 40)
             return CGRect(x: text.position.x - approximateSize.width/2, y: text.position.y - approximateSize.height/2, width: approximateSize.width, height: approximateSize.height)
         }

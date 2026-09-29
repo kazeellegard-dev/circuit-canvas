@@ -1354,8 +1354,112 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(merged, element(app,"symbol-コイル-group").value as? String, "widening an existing group must not leave a member behind in a separate group")
     }
 
+    /// A marquee drag that starts exactly on top of an existing item (not on empty canvas) must still reach
+    /// canvasPanGesture and draw a marquee, rather than being swallowed by that item's own (still-attached)
+    /// drag gesture - this task's own requirement has no such restriction on where the drag may begin (Codex
+    /// major, 5E round 1: the original tests only ever started their marquees from empty space).
     @MainActor
-    func testUndoRedoOnGroupingAndUngrouping() throws {
+    func testGroupSelectionMarqueeCanStartOnTopOfAnItem() throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
+        app.buttons["group-mode-toggle"].tap()
+        let start = element(app,"symbol-24 V → 5 V").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        let end = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:200,dy:420))
+        start.press(forDuration:0.2, thenDragTo:end)
+        XCTAssertTrue(app.staticTexts["グループ化しますか？"].waitForExistence(timeout:2),"a marquee started on top of an item must still register as a drag on the canvas")
+        app.buttons["はい"].tap()
+        XCTAssertFalse((element(app,"symbol-24 V → 5 V-group").value as? String ?? "").isEmpty)
+        XCTAssertEqual(element(app,"symbol-24 V → 5 V-group").value as? String, element(app,"symbol-Temperature-group").value as? String)
+    }
+
+    @MainActor
+    func testWirePinOnAGroupedSymbolCannotBeReconnectedDirectlyOrViaANearbyBackgroundTap() throws {
+        let app = XCUIApplication(); app.launch()
+        // "24 V → 5 V" (120,160) + "Main MCU" (370,250) - excludes the seed note and CAN/Temperature.
+        groupViaMarquee(app, from: CGVector(dx:60,dy:140), to: CGVector(dx:420,dy:320))
+        XCTAssertFalse((element(app,"symbol-24 V → 5 V-group").value as? String ?? "").isEmpty)
+        app.buttons["配線"].tap()
+
+        // Direct tap on the grouped symbol's own pin - SymbolCard's own selectPin guard.
+        app.buttons["symbol-24 V → 5 V-pin-1"].tap()
+        XCTAssertTrue(app.staticTexts["始点のピンをタップ"].exists,"a grouped symbol's pin must not start a wire from a direct tap on it")
+
+        // A background tap NEAR (not on) that same pin - canvasTapGesture's own nearestPin fallback, which
+        // has no group check of its own without this task's fix (Codex major, 5E round 1).
+        let pinValue = (element(app,"symbol-24 V → 5 V-pin-1").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+        XCTAssertEqual(pinValue.count, 2)
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:pinValue[0],dy:pinValue[1]+30)).tap()
+        XCTAssertTrue(app.staticTexts["始点のピンをタップ"].exists,"a background tap near a grouped symbol's pin must not start a wire either")
+    }
+
+    /// Covers a group mixing all three item types, with a wire reaching OUTSIDE the group to an ungrouped
+    /// symbol - the original 6 tests were all-symbol groups only (Codex major, 5E round 1).
+    @MainActor
+    func testMixedGroupMovesAllMemberTypesTogetherAndKeepsAnExternalWireAttachedWhileTheOtherEndStaysPut() throws {
+        let app = XCUIApplication(); app.launch()
+        // A note and a text placed near "CAN" (620,250), which the seed diagram wires to "Main MCU" (370,250)
+        // - well outside the marquee below, so that wire's far end must stay fixed while the near end moves.
+        app.buttons["＋メモ"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:620,dy:350)).tap()
+        app.buttons["確認"].tap()
+        app.navigationBars["インスペクタ"].swipeDown()
+        app.buttons["library-category-テキスト"].tap()
+        app.buttons["library-テキスト"].tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:620,dy:420)).tap()
+
+        groupViaMarquee(app, from: CGVector(dx:550,dy:220), to: CGVector(dx:700,dy:450))
+        let groupID = element(app,"symbol-CAN-group").value as? String ?? ""
+        XCTAssertFalse(groupID.isEmpty)
+        XCTAssertEqual(groupID, element(app,"experiment-note-新しいメモ-group").value as? String)
+        XCTAssertEqual(groupID, element(app,"text-テキスト-group").value as? String)
+
+        func xy(_ value: String) -> (Double, Double) {
+            let n = value.split(whereSeparator: { !("-0123456789.".contains($0)) }).compactMap { Double($0) }
+            return (n.count > 0 ? n[0] : .nan, n.count > 1 ? n[1] : .nan)
+        }
+        func pin(_ title: String, _ index: Int) -> [Double] { (element(app,"symbol-\(title)-pin-\(index)").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        let notePosBefore = xy(element(app,"experiment-note-新しいメモ").value as? String ?? "")
+        let textPosBefore = xy(element(app,"text-テキスト").value as? String ?? "")
+        let canPinBefore = pin("CAN", 0)               // CAN's LEFT pin, wired to Main MCU
+        let mainMCUPinBefore = pin("Main MCU", 1)      // Main MCU's RIGHT pin - outside the group, must not move
+
+        // Drag the note (one of the three member types) - every member, of every type, must move together.
+        let handle = element(app,"experiment-note-新しいメモ").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handle.press(forDuration:0.2, thenDragTo: handle.withOffset(CGVector(dx:40,dy:-30)))
+
+        let notePosAfter = xy(element(app,"experiment-note-新しいメモ").value as? String ?? "")
+        let textPosAfter = xy(element(app,"text-テキスト").value as? String ?? "")
+        let canPinAfter = pin("CAN", 0)
+        let mainMCUPinAfter = pin("Main MCU", 1)
+
+        XCTAssertEqual(notePosAfter.0-notePosBefore.0, 40, accuracy:2)
+        XCTAssertEqual(notePosAfter.1-notePosBefore.1, -30, accuracy:2)
+        XCTAssertEqual(textPosAfter.0-textPosBefore.0, 40, accuracy:2, "the text member must have moved by the same amount as the dragged note")
+        XCTAssertEqual(textPosAfter.1-textPosBefore.1, -30, accuracy:2)
+        XCTAssertEqual(canPinAfter[0]-canPinBefore[0], 40, accuracy:2, "the symbol member (CAN) must have moved too")
+        XCTAssertEqual(canPinAfter[1]-canPinBefore[1], -30, accuracy:2)
+        XCTAssertEqual(mainMCUPinAfter[0], mainMCUPinBefore[0], accuracy:2, "the OTHER end of the wire, outside the group, must not have moved")
+        XCTAssertEqual(mainMCUPinAfter[1], mainMCUPinBefore[1], accuracy:2)
+
+        // The wire's outside segment must have re-routed to the group's new position while staying attached
+        // to Main MCU's own fixed pin - "配線はつながったまま...自動で再描画する".
+        let wireValue = (element(app,"wire-1").value as? String ?? "").split(separator:",").compactMap{Double($0)}
+        XCTAssertEqual(wireValue.count, 4)
+        XCTAssertEqual(wireValue[0], mainMCUPinAfter[0], accuracy:2); XCTAssertEqual(wireValue[1], mainMCUPinAfter[1], accuracy:2)
+        XCTAssertEqual(wireValue[2], canPinAfter[0], accuracy:2); XCTAssertEqual(wireValue[3], canPinAfter[1], accuracy:2)
+
+        // Individual editing must be blocked for every member type, not only symbols.
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertFalse(element(app,"experiment-note-新しいメモ-edit-delete").exists)
+        XCTAssertFalse(element(app,"text-テキスト-edit-delete").exists)
+        XCTAssertFalse(element(app,"symbol-CAN-edit-delete").exists)
+    }
+
+    /// Covers Undo/Redo for every group-level operation this task calls out - creating, ungrouping, moving
+    /// (as one step for the whole group, not per member), and deleting - not only creation (Codex minor, 5E
+    /// round 1: the original version of this test stopped there).
+    @MainActor
+    func testUndoRedoOnGroupingUngroupingMovingAndDeletingAGroup() throws {
         let app = XCUIApplication(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:700, y:500)
         place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
@@ -1369,6 +1473,45 @@ final class CircuitCanvasUITests: XCTestCase {
         app.buttons["redo-button"].tap()
         XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, groupID, "redo must restore the exact same group")
         XCTAssertEqual(element(app,"symbol-コンデンサ-group").value as? String, groupID)
+
+        // Ungroup, then Undo/Redo that too.
+        element(app,"symbol-抵抗").tap()
+        app.buttons["group-ungroup"].tap()
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, "", "ungrouping must have taken effect")
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, groupID, "undo must restore the group ungrouping just removed")
+        XCTAssertEqual(element(app,"symbol-コンデンサ-group").value as? String, groupID)
+        app.buttons["redo-button"].tap()
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, "", "redo must remove it again")
+        app.buttons["undo-button"].tap()   // back to grouped, to continue with move/delete below
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, groupID)
+
+        // Move the group, then Undo it in ONE step - both members must revert together, not one at a time.
+        func pin(_ title: String) -> [Double] { (element(app,"symbol-\(title)-pin-0").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
+        let beforeMoveA = pin("抵抗"), beforeMoveB = pin("コンデンサ")
+        let handle = element(app,"symbol-抵抗").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handle.press(forDuration:0.2, thenDragTo: handle.withOffset(CGVector(dx:30,dy:30)))
+        XCTAssertEqual(pin("抵抗")[0]-beforeMoveA[0], 30, accuracy:2, "the move must actually have happened, or undoing it below would prove nothing")
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(pin("抵抗")[0], beforeMoveA[0], accuracy:2, "undo must restore the dragged member's position")
+        XCTAssertEqual(pin("抵抗")[1], beforeMoveA[1], accuracy:2)
+        XCTAssertEqual(pin("コンデンサ")[0], beforeMoveB[0], accuracy:2, "and the OTHER member's position too, in the same single undo step")
+        XCTAssertEqual(pin("コンデンサ")[1], beforeMoveB[1], accuracy:2)
+
+        // Delete the group, then Undo/Redo that.
+        app.buttons["edit-mode-toggle"].tap()
+        element(app,"group-\(groupID)-edit-delete").tap()
+        XCTAssertTrue(app.staticTexts["削除しますか？"].waitForExistence(timeout:2))
+        app.buttons["削除"].tap()
+        XCTAssertFalse(element(app,"symbol-抵抗").exists)
+        XCTAssertFalse(element(app,"symbol-コンデンサ").exists)
+        app.buttons["undo-button"].tap()
+        XCTAssertTrue(element(app,"symbol-抵抗").waitForExistence(timeout:2),"undo must restore every deleted member")
+        XCTAssertTrue(element(app,"symbol-コンデンサ").exists)
+        XCTAssertEqual(element(app,"symbol-抵抗-group").value as? String, groupID, "and their group membership")
+        app.buttons["redo-button"].tap()
+        XCTAssertFalse(element(app,"symbol-抵抗").exists,"redo must delete the whole group again")
+        XCTAssertFalse(element(app,"symbol-コンデンサ").exists)
     }
 
     /// Parses the "x=..;y=..;w=..;h=.." accessibility values this feature exposes for its hole/card rects
