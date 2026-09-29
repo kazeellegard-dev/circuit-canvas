@@ -14,38 +14,11 @@ private enum ResizeCorner: String, CaseIterable, Identifiable {
     var sx: CGFloat { self == .tl || self == .bl ? -1 : 1 }
     var sy: CGFloat { self == .tl || self == .tr ? -1 : 1 }
 }
-/// Resizing of experiment notes: 20pt steps, wide enough to read the body text at the minimum size.
-private enum NoteSize {
-    static let step: CGFloat = 20
-    // Aligned to `standard` (170,100) so the first resize snaps predictably rather than jumping to a
-    // grid the starting size does not sit on.
-    static let minimum = CGSize(width:150,height:80)
-    static let maximum = CGSize(width:390,height:320)
-    static let standard = CGSize(width:170,height:100)
-    static func snapped(_ proposed: CGSize) -> CGSize { ResizableGeometry.snapped(proposed, step:step, minimum:minimum, maximum:maximum) }
-    static func handleRect(body: CGRect, sx: CGFloat, sy: CGFloat, scale: CGFloat) -> CGRect {
-        ResizableGeometry.handleRect(body:body, sx:sx, sy:sy, scale:scale)
-    }
-    static func resized(center: CGPoint, size: CGSize, sx: CGFloat, sy: CGFloat, translation: CGSize) -> (center: CGPoint, size: CGSize) {
-        ResizableGeometry.resized(center:center, size:size, sx:sx, sy:sy, translation:translation, step:step, minimum:minimum, maximum:maximum)
-    }
-}
 private enum Tool { case select, symbol, note, text, wire, pan, group }
 /// What the ✗ badge (edit mode, 4C) is about to delete, pending its confirmation alert.
 private enum EditDeleteTarget: Identifiable {
     case symbol(UUID), note(UUID), text(UUID), group(UUID)
     var id: String { switch self { case .symbol(let id): "symbol-\(id)"; case .note(let id): "note-\(id)"; case .text(let id): "text-\(id)"; case .group(let id): "group-\(id)" } }
-}
-/// One member of a group (5E) - a group can freely mix symbols, notes, and texts.
-private enum GroupMember: Hashable {
-    case symbol(UUID), note(UUID), text(UUID)
-}
-/// A flat collection of symbols/notes/texts that move, get selected, and get deleted together. Never
-/// nested, per this task's own scope - grouping a selection that touches an existing group's members
-/// widens that same group instead of creating a group-of-groups (see createOrMergeGroup).
-private struct GroupItem: Identifiable {
-    let id = UUID()
-    var members: Set<GroupMember>
 }
 /// Which inspector text field (5D) is being edited live, on the canvas, with every other element dimmed and
 /// unreachable. Only text-entry fields (name/title/body) - the picker fields (種別・アイコン) are unaffected,
@@ -98,21 +71,6 @@ private enum LiveEditCardMetrics {
         return CGSize(width: minFieldWidth + outerPadding, height: fieldHeight + spacing + doneButtonHeight + outerPadding)
     }
 }
-private enum NoteType: String, CaseIterable, Identifiable {
-    case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
-    var id: Self { self }
-    /// The icon associated with this type; also the default icon a newly created note starts with.
-    var icon: String {
-        switch self {
-        case .modification: "wrench.and.screwdriver.fill"
-        case .measurement: "waveform"
-        case .confirmation: "checkmark.seal.fill"
-        case .unresolved: "exclamationmark.triangle.fill"
-        case .caution: "exclamationmark.circle.fill"
-        case .memo: "note.text"
-        }
-    }
-}
 /// Categorised SF Symbols for a note's icon: one per NoteType (6, memo included) plus a few generic ones,
 /// for ~10 total - mirrors BlockIcon's grouping, reused by the same IconPickerView.
 private enum NoteIcon {
@@ -121,48 +79,6 @@ private enum NoteIcon {
         ("その他", ["tag.fill", "flag.fill", "star.fill", "pin.fill"])
     ]
 }
-/// The corner of a note that a relate line starts from - tapped explicitly (like choosing a wire's pin),
-/// rather than always the note's center. Follows the note's bounds, so only the note-side end moves when
-/// the note is dragged; the far end (the note's `anchor`) is a fixed canvas point that never moves.
-private enum NoteCorner: String, CaseIterable, Identifiable {
-    case topLeading, topTrailing, bottomLeading, bottomTrailing
-    var id: Self { self }
-    func point(in bounds: CGRect) -> CGPoint {
-        switch self {
-        case .topLeading: CGPoint(x: bounds.minX, y: bounds.minY)
-        case .topTrailing: CGPoint(x: bounds.maxX, y: bounds.minY)
-        case .bottomLeading: CGPoint(x: bounds.minX, y: bounds.maxY)
-        case .bottomTrailing: CGPoint(x: bounds.maxX, y: bounds.maxY)
-        }
-    }
-}
-private struct SymbolItem: Identifiable {
-    let id = UUID(); var title: String; var kind: SymbolKind; var position: CGPoint; var rotation: Int; var size: CGSize
-    var icon: String   // Stored (not derived from kind): the user can change a block's icon after placing it.
-    var blockPins: [SymbolKind.BlockPin]   // Meaningful only when kind.isBlock; circuit symbols use kind.pinSpecs.
-    init(title: String, kind: SymbolKind, position: CGPoint, icon: String? = nil) {
-        self.title = title; self.kind = kind; self.position = position
-        self.rotation = kind.defaultRotation; self.size = kind.frameSize
-        self.icon = icon ?? kind.icon
-        self.blockPins = SymbolKind.defaultBlockPins
-    }
-}
-private struct NoteItem: Identifiable {
-    let id = UUID(); var type: NoteType = .modification; var title: String; var body: String; var position: CGPoint
-    var complete = false; var anchor: CGPoint?; var relateCorner: NoteCorner = .topLeading; var size: CGSize = NoteSize.standard
-    var icon: String
-    init(type: NoteType = .modification, title: String, body: String, position: CGPoint, anchor: CGPoint? = nil, icon: String? = nil) {
-        self.type = type; self.title = title; self.body = body; self.position = position; self.anchor = anchor
-        self.icon = icon ?? type.icon
-    }
-}
-/// A plain text label (5C): unlike a note, it has no type/icon/anchor/resize - just content and a position.
-/// No pins, so it can never be wired.
-private struct TextItem: Identifiable {
-    let id = UUID(); var body: String; var position: CGPoint
-    init(body: String = "テキスト", position: CGPoint) { self.body = body; self.position = position }
-}
-private struct WireItem: Identifiable { let id = UUID(); var start: CGPoint; var end: CGPoint; var points: [CGPoint] = []; var manual = false; var manualPoints: [CGPoint] = [] }
 /// One Undo/Redo step (4D): the whole diagram's content, from just before one meaningful operation. Simpler
 /// and safer than hooking every mutation individually into SwiftUI's UndoManager, at the cost of copying
 /// three arrays per step - trivial at this diagram's scale, and capped (maxUndoSteps) regardless.
@@ -266,6 +182,23 @@ struct ContentView: View {
     @State private var texts: [TextItem] = []
     @State private var groups: [GroupItem] = []
     @State private var wires: [WireItem] = []
+    // MARK: Files - save / open (MVP)
+    private enum DocumentReplacement { case new, pick, url(URL) }
+    /// The file this diagram is saved in (nil = untitled, never saved).
+    @State private var documentURL: URL?
+    /// The content as last saved, opened, or started blank - what "unsaved changes" are measured against.
+    @State private var documentBaseline: CanvasDocument?
+    /// The file's modification date right after this app last read or wrote it (see writeCurrentFile).
+    @State private var documentModificationDate: Date?
+    /// Set after a failed write or a conflict: no more autosaves until the user resolves it.
+    @State private var autosavePaused = false
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var showSaveAs = false
+    @State private var showOpen = false
+    @State private var showExport = false
+    @State private var showFileConflict = false
+    @State private var pendingReplacement: DocumentReplacement?
+    @State private var fileErrorMessage: String?
     // MARK: Onboarding coachmarks (3D)
     @AppStorage("onboardingDismissed") private var onboardingDismissed = false
     @State private var onboardingStep: OnboardingStep?
@@ -330,6 +263,8 @@ struct ContentView: View {
                 // UITEST_ONBOARDING: "off" never auto-starts the tour (every test that is not about it) and
                 // leaves the stored preference alone; "reset" forgets "次回から表示しない" first, so a test
                 // starts from a genuine first launch. Absent: the real first-launch behavior.
+                applyTestDocumentFile()
+                if documentBaseline == nil { documentBaseline = currentDocument }
                 switch ProcessInfo.processInfo.environment["UITEST_ONBOARDING"] {
                 case "off": break
                 case "reset": onboardingDismissed = false; startOnboarding()
@@ -337,6 +272,25 @@ struct ContentView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button("新規", systemImage: "doc.badge.plus") { requestReplacingDocument(.new) }
+                            .accessibilityIdentifier("file-new")
+                        Button("開く…", systemImage: "folder") { requestReplacingDocument(.pick) }
+                            .accessibilityIdentifier("file-open")
+                        Button("保存", systemImage: "square.and.arrow.down") { saveDocument() }
+                            .accessibilityIdentifier("file-save")
+                        Button("別名で保存…", systemImage: "square.and.arrow.down.on.square") { showSaveAs = true }
+                            .accessibilityIdentifier("file-save-as")
+                        Divider()
+                        Button("書き出す（PDF・PNG）…", systemImage: "square.and.arrow.up") { showExport = true }
+                            .accessibilityIdentifier("file-export")
+                    } label: {
+                        Label("ファイル", systemImage: "doc")
+                    }
+                    .disabled(toolbarDisabled)
+                    .accessibilityIdentifier("file-menu")
+                }
                 ToolbarItemGroup(placement: .primaryAction) {
                     // Left enabled during edit mode on purpose: undoing an accidental delete is exactly the
                     // safety net this exists for, and it would defeat the point to grey it out right then.
@@ -451,6 +405,52 @@ struct ContentView: View {
         // Over the whole NavigationStack (not just the editor) so the coachmarks can point at toolbar
         // buttons and the library too.
         .overlay { coachmarkOverlay }
+        .overlay(alignment: .bottomLeading) {
+            Text("document").font(.system(size: 1)).opacity(0.01)
+                .accessibilityIdentifier("document-state")
+                .accessibilityValue(documentStateValue)
+                .allowsHitTesting(false)
+        }
+        .onChange(of: currentDocument) { scheduleAutosave() }
+        .focusedSceneValue(\.documentCommands, documentCommands)
+        .onOpenURL { url in requestReplacingDocument(.url(url)) }
+        .fileImporter(isPresented: $showOpen, allowedContentTypes: [.circuitCanvas]) { result in
+            switch result {
+            case .success(let url): openDocument(at: url)
+            case .failure(let error): fileErrorMessage = "開けませんでした。\n\(error.localizedDescription)"
+            }
+        }
+        .background {
+            // On its own view: SwiftUI does not reliably present two file panels attached to the same one.
+            let document = currentDocument
+            Color.clear
+                .fileExporter(isPresented: $showSaveAs, document: CanvasFileDocument(document: document), contentType: .circuitCanvas,
+                              defaultFilename: canvasName) { savedAs($0, document: document) }
+        }
+        .sheet(isPresented: $showExport) { exportSheet }
+        .alert("保存されていない変更があります", isPresented: Binding(get: { pendingReplacement != nil }, set: { if !$0 { pendingReplacement = nil } })) {
+            Button("保存しないで続ける", role: .destructive) {
+                if let action = pendingReplacement { autosavePaused = false; performReplacement(action) }
+                pendingReplacement = nil
+            }
+            Button("保存…") { pendingReplacement = nil; saveDocument() }
+            Button("キャンセル", role: .cancel) { pendingReplacement = nil }
+        } message: {
+            Text("今のキャンバスの内容は保存されていません。保存しないで続けると、失われます。")
+        }
+        .alert("ファイルがほかで変更されています", isPresented: $showFileConflict) {
+            Button("ファイルから読み込み直す", role: .destructive) { if let documentURL { openDocument(at: documentURL) } }
+            Button("上書きして保存") { writeCurrentFile(force: true) }
+            Button("別名で保存…") { showSaveAs = true }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("ほかの端末やアプリで、このファイルが変更されました。上書きしないように、自動保存を止めています。")
+        }
+        .alert("ファイル", isPresented: Binding(get: { fileErrorMessage != nil }, set: { if !$0 { fileErrorMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(fileErrorMessage ?? "")
+        }
         .alert("使い方の説明を終わります", isPresented: $showOnboardingFinish) {
             Button("次回から表示しない") { onboardingDismissed = true }
             Button("次回も表示する", role: .cancel) { onboardingDismissed = false }
@@ -1330,6 +1330,197 @@ struct ContentView: View {
         guard let i = notes.firstIndex(where: { $0.id == id }) else { return }
         pushUndo()
         notes[i].anchor = point; notes[i].relateCorner = corner
+    }
+    // MARK: Files - save / open (MVP)
+    /// The diagram as it would be saved right now.
+    private var currentDocument: CanvasDocument {
+        CanvasDocument(name: canvasName, description: canvasDescription, symbols: symbols, notes: notes, texts: texts,
+                       wires: wires, groups: groups, viewport: .init(scale: canvasScale, offset: canvasOffset))
+    }
+    /// Unsaved = the content differs from what was last saved, opened, or started blank. Scrolling and
+    /// zooming alone do not count (they are still saved along with the next change).
+    private var hasUnsavedChanges: Bool {
+        guard let documentBaseline else { return false }
+        var current = currentDocument, baseline = documentBaseline
+        current.viewport = nil; baseline.viewport = nil
+        return current != baseline
+    }
+    private var documentStateValue: String {
+        "file=\(documentURL?.lastPathComponent ?? "none");unsaved=\(hasUnsavedChanges ? 1 : 0);autosave=\(autosavePaused ? "paused" : "on")"
+    }
+    private var documentCommands: DocumentCommandActions {
+        DocumentCommandActions(new: { requestReplacingDocument(.new) }, open: { requestReplacingDocument(.pick) },
+                               save: saveDocument, saveAs: { showSaveAs = true }, export: { showExport = true })
+    }
+    /// 新規 / 開く replace the whole diagram. A file-backed diagram is saved first (it autosaves anyway);
+    /// an untitled one with content asks before its content is thrown away.
+    private func requestReplacingDocument(_ action: DocumentReplacement) {
+        guard !toolbarDisabled else { return }
+        if documentURL != nil, hasUnsavedChanges, !autosavePaused {
+            writeCurrentFile(force: false)
+            if showFileConflict { return }   // the conflict has to be resolved first
+        }
+        if hasUnsavedChanges { pendingReplacement = action } else { performReplacement(action) }
+    }
+    private func performReplacement(_ action: DocumentReplacement) {
+        switch action {
+        case .new: startNewDocument()
+        case .pick: showOpen = true
+        case .url(let url): openDocument(at: url)
+        }
+    }
+    private func startNewDocument() {
+        autosaveTask?.cancel()
+        apply(CanvasDocument(name: "Circuit Canvas", description: "", symbols: [], notes: [], texts: [], wires: [], groups: []))
+        documentURL = nil; documentModificationDate = nil; autosavePaused = false
+    }
+    private func openDocument(at url: URL) {
+        do {
+            let document = try CanvasDocument.read(from: url)
+            autosaveTask?.cancel()
+            apply(document)
+            documentURL = url; documentModificationDate = FileAccess.modificationDate(of: url); autosavePaused = false
+        } catch {
+            fileErrorMessage = "「\(url.lastPathComponent)」を開けませんでした。\n\(error.localizedDescription)"
+        }
+    }
+    /// Replaces everything on screen with `document`: a fresh start, with no Undo history into the previous
+    /// diagram. Wires keep their saved routes (like Undo's restore) rather than being replanned.
+    private func apply(_ document: CanvasDocument) {
+        restore(CanvasSnapshot(symbols: document.symbols, notes: document.notes, texts: document.texts, wires: document.wires, groups: document.groups))
+        undoStack = []; redoStack = []
+        tool = .select; editMode = false
+        canvasName = document.name; canvasDescription = document.description
+        if let viewport = document.viewport {
+            canvasScale = viewport.scale; canvasScaleOrigin = viewport.scale
+            canvasOffset = viewport.offset; canvasPanOrigin = viewport.offset
+            didInitialCenter = true
+        } else {
+            canvasScale = 1; canvasScaleOrigin = 1
+            didInitialCenter = true
+            centerViewportOnCanvas()
+        }
+        documentBaseline = document
+    }
+    /// 保存: to the file this diagram came from or was last saved as; an untitled one asks where first.
+    private func saveDocument() {
+        guard documentURL != nil else { showSaveAs = true; return }
+        writeCurrentFile(force: false)
+    }
+    /// Writes the current file, unless someone else changed it since this app last read or wrote it (another
+    /// device via iCloud Drive, another app): then nothing is overwritten until the user picks what to do.
+    private func writeCurrentFile(force: Bool) {
+        guard let url = documentURL else { return }
+        autosaveTask?.cancel()
+        if !force, let known = documentModificationDate, let onDisk = FileAccess.modificationDate(of: url), onDisk != known {
+            autosavePaused = true; showFileConflict = true
+            return
+        }
+        let document = currentDocument
+        do {
+            try document.write(to: url)
+            documentBaseline = document
+            documentModificationDate = FileAccess.modificationDate(of: url)
+            autosavePaused = false
+        } catch {
+            autosavePaused = true
+            fileErrorMessage = "「\(url.lastPathComponent)」に保存できませんでした。自動保存を止めています。\n\(error.localizedDescription)"
+        }
+    }
+    /// A file-backed diagram saves itself shortly after each change (also scrolling/zooming, so the view
+    /// position comes back when it is reopened). Untitled ones are not written anywhere until saved.
+    private func scheduleAutosave() {
+        guard documentURL != nil, !autosavePaused else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            writeCurrentFile(force: false)
+        }
+    }
+    private func savedAs(_ result: Result<URL, Error>, document: CanvasDocument) {
+        switch result {
+        case .success(let url):
+            documentURL = url; documentBaseline = document
+            documentModificationDate = FileAccess.modificationDate(of: url); autosavePaused = false
+            // Anything changed while the save panel was up is written right away.
+            if currentDocument != document { scheduleAutosave() }
+        case .failure(let error):
+            fileErrorMessage = "保存できませんでした。\n\(error.localizedDescription)"
+        }
+    }
+    /// Test-only (UITEST_DOCUMENT_FILE=<name>): a file in the app's temporary directory, opened at launch if
+    /// it exists and otherwise used as this diagram's file from the start - lets a UI test save and reopen
+    /// without driving the system file picker, which runs outside the app.
+    private func applyTestDocumentFile() {
+        guard let name = ProcessInfo.processInfo.environment["UITEST_DOCUMENT_FILE"] else { return }
+        let url = FileManager.default.temporaryDirectory.appending(path: name)
+        if FileManager.default.fileExists(atPath: url.path()) { openDocument(at: url) } else { documentURL = url }
+    }
+    // MARK: Files - PDF/PNG export (MVP)
+    private var exportSheet: some View {
+        ExportSheet(name: canvasName, hasNotes: !notes.isEmpty) { includeNotes in exportDrawing(includeNotes: includeNotes) }
+    }
+    /// The diagram alone, for export: no grid, selection, handles, badges or hint text, always in light
+    /// colors on white, cropped to what is drawn (ExportLayout.bounds). nil when the canvas is empty.
+    private func exportDrawing(includeNotes: Bool) -> ExportDrawing? {
+        // A non-block symbol's name is drawn outside its body, hence the extra room around each symbol.
+        var rects = symbols.map { $0.kind.body(at: $0.position, rotation: $0.rotation, size: $0.size).insetBy(dx: -28, dy: -28) }
+        rects += wires.flatMap { wire in (wire.points.isEmpty ? [wire.start, wire.end] : wire.points).map { CGRect(origin: $0, size: .zero) } }
+        rects += texts.map { textCanvasFrames[$0.id] ?? CGRect(x: $0.position.x - 80, y: $0.position.y - 20, width: 160, height: 40) }
+        if includeNotes {
+            for note in notes {
+                rects.append(CGRect(x: note.position.x - note.size.width/2, y: note.position.y - note.size.height/2, width: note.size.width, height: note.size.height))
+                if let anchor = note.anchor { rects.append(CGRect(origin: anchor, size: .zero)) }
+            }
+        }
+        guard let area = ExportLayout.bounds(of: rects, in: CGRect(origin: .zero, size: canvasSize)) else { return nil }
+        let content = ZStack(alignment: .topLeading) {
+            Color.white
+            Canvas { context, _ in
+                if includeNotes {
+                    for note in notes {
+                        guard let anchor = note.anchor else { continue }
+                        let bounds = CGRect(x: note.position.x-note.size.width/2, y: note.position.y-note.size.height/2, width: note.size.width, height: note.size.height)
+                        var path = Path(); path.move(to: note.relateCorner.point(in: bounds)); path.addLine(to: anchor)
+                        context.stroke(path, with: .color(.secondary), style: .init(lineWidth: 1, dash: [4, 4]))
+                    }
+                }
+                for (index, wire) in wires.enumerated() {
+                    let hops = wireHops(index)
+                    context.stroke(wirePath(wire.points, hops: hops), with: .color(.primary), lineWidth: 2)
+                    for hop in hops where hop.radius == 0 {
+                        let rect = CGRect(x: hop.point.x-3, y: hop.point.y-3, width: 6, height: 6)
+                        context.stroke(Path(ellipseIn: rect), with: .color(.primary), lineWidth: 1)
+                    }
+                }
+                var junctions = Path()
+                for point in WireRouting.junctions(wires.map(\.points)) {
+                    junctions.addEllipse(in: CGRect(x: point.x-5, y: point.y-5, width: 10, height: 10))
+                }
+                context.fill(junctions, with: .color(.primary))
+            }
+            ForEach(symbols) { symbol in
+                SymbolCard(symbol: symbol, isConnected: isConnected(symbol), selected: false, wireStartPinIndex: nil,
+                           select: {}, selectPin: { _ in })
+                    .position(symbol.position)
+            }
+            if includeNotes {
+                ForEach(notes) { note in
+                    NoteCard(note: .constant(note), selected: false, select: {}).position(note.position)
+                }
+            }
+            ForEach(texts) { text in
+                TextCard(text: .constant(text), selected: false, editMode: false, scale: 1, select: {}, delete: {})
+                    .position(text.position)
+            }
+        }
+        .frame(width: canvasSize.width, height: canvasSize.height, alignment: .topLeading)
+        .offset(x: -area.minX, y: -area.minY)
+        .frame(width: area.width, height: area.height, alignment: .topLeading)
+        .clipped()
+        .environment(\.colorScheme, .light)
+        return ExportDrawing(content: AnyView(content), size: area.size)
     }
     // MARK: Onboarding coachmarks (3D)
     /// Runs the tour from its first step (first launch, or Settings' "使い方を見る"). Leaves every other mode

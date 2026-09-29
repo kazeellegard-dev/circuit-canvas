@@ -3138,4 +3138,157 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.alerts.buttons["次回から表示しない"].waitForExistence(timeout: 2))
         app.alerts.buttons["次回も表示する"].tap()
     }
+
+    // MARK: - Save / open and PDF/PNG export (MVP)
+
+    /// UITEST_DOCUMENT_FILE: a file in the app's own temporary directory, opened at launch when it exists and
+    /// otherwise this diagram's file from the start - so saving and reopening need no system file picker.
+    @MainActor private func makeDocumentApp(file: String, seed: Bool) -> XCUIApplication {
+        let app = makeApp()
+        app.launchEnvironment["UITEST_SEED_SAMPLE"] = seed ? "1" : "0"
+        app.launchEnvironment["UITEST_DOCUMENT_FILE"] = file
+        return app
+    }
+
+    @MainActor private func documentState(_ app: XCUIApplication) -> String {
+        element(app, "document-state").value as? String ?? ""
+    }
+
+    @MainActor private func waitForDocumentState(_ app: XCUIApplication, containing text: String, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "value CONTAINS %@", text)
+        return XCTWaiter().wait(for: [expectation(for: predicate, evaluatedWith: element(app, "document-state"))], timeout: timeout) == .completed
+    }
+
+    @MainActor private func chooseFileMenuItem(_ app: XCUIApplication, _ title: String) {
+        app.buttons["file-menu"].tap()
+        let item = app.buttons[title]
+        XCTAssertTrue(item.waitForExistence(timeout: 2), "the file menu has no \(title)")
+        item.tap()
+    }
+
+    @MainActor
+    func testSaveThenReopenRestoresTheWholeDiagram() {
+        let file = "save-\(UUID().uuidString).circuitcanvas"
+        let app = makeDocumentApp(file: file, seed: true); app.launch()
+        XCTAssertTrue(element(app, "symbol-Main MCU").waitForExistence(timeout: 3))
+        XCTAssertTrue(documentState(app).hasPrefix("file=\(file);"), documentState(app))
+        connectTemperatureToCAN(app)
+        chooseFileMenuItem(app, "保存")
+        XCTAssertTrue(waitForDocumentState(app, containing: "unsaved=0"), documentState(app))
+        app.terminate()
+
+        // Relaunched without the sample: everything on screen now comes from the file.
+        let reopened = makeDocumentApp(file: file, seed: false); reopened.launch()
+        for name in ["24 V → 5 V", "Main MCU", "CAN", "Temperature"] {
+            XCTAssertTrue(element(reopened, "symbol-\(name)").waitForExistence(timeout: 3), "\(name) was not restored")
+        }
+        XCTAssertTrue(element(reopened, "wire-3").exists, "the wire added before saving was not restored")
+        XCTAssertTrue(element(reopened, "experiment-note-R12を変更").exists, "the note was not restored")
+        XCTAssertTrue(documentState(reopened).contains("unsaved=0"), documentState(reopened))
+        assertWireCount(reopened, "4")
+    }
+
+    @MainActor
+    func testEditsToASavedFileAreSavedAutomatically() {
+        let file = "autosave-\(UUID().uuidString).circuitcanvas"
+        let app = makeDocumentApp(file: file, seed: true); app.launch()
+        XCTAssertTrue(element(app, "symbol-Main MCU").waitForExistence(timeout: 3))
+        connectTemperatureToCAN(app)
+        // No 保存: the change is written on its own shortly afterwards.
+        XCTAssertTrue(waitForDocumentState(app, containing: "unsaved=0"), documentState(app))
+        app.terminate()
+
+        let reopened = makeDocumentApp(file: file, seed: false); reopened.launch()
+        XCTAssertTrue(element(reopened, "symbol-Main MCU").waitForExistence(timeout: 3))
+        XCTAssertTrue(element(reopened, "wire-3").exists, "the autosaved wire was not restored")
+    }
+
+    @MainActor
+    func testNewAsksBeforeDiscardingAnUntitledDiagram() {
+        let app = makeApp(); app.launch()
+        XCTAssertTrue(element(app, "symbol-Main MCU").waitForExistence(timeout: 3))
+        XCTAssertTrue(documentState(app).hasPrefix("file=none;unsaved=0"), documentState(app))
+        connectTemperatureToCAN(app)
+        XCTAssertTrue(documentState(app).contains("unsaved=1"), documentState(app))
+
+        chooseFileMenuItem(app, "新規")
+        XCTAssertTrue(app.alerts["保存されていない変更があります"].waitForExistence(timeout: 2))
+        app.alerts.buttons["キャンセル"].tap()
+        XCTAssertTrue(element(app, "wire-3").exists, "cancelling must keep the diagram")
+
+        chooseFileMenuItem(app, "新規")
+        XCTAssertTrue(app.alerts["保存されていない変更があります"].waitForExistence(timeout: 2))
+        app.alerts.buttons["保存しないで続ける"].tap()
+        XCTAssertTrue(element(app, "symbol-Main MCU").waitForNonExistence(timeout: 2), "新規 must start blank")
+        XCTAssertFalse(element(app, "experiment-note-R12を変更").exists)
+        XCTAssertTrue(documentState(app).hasPrefix("file=none;unsaved=0"), documentState(app))
+        XCTAssertEqual(app.buttons["元に戻す"].isEnabled, false, "a new diagram has nothing to undo")
+    }
+
+    /// A Form toggle only flips when its switch itself is tapped, not the row's center.
+    @MainActor private func flip(_ toggle: XCUIElement) {
+        let knob = toggle.switches.firstMatch
+        (knob.exists ? knob : toggle).tap()
+    }
+
+    @MainActor private func exportSummary(_ app: XCUIApplication) -> [String: String] {
+        let value = element(app, "export-summary").value as? String ?? ""
+        return Dictionary(uniqueKeysWithValues: value.split(separator: ";").compactMap { pair in
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            return parts.count == 2 ? (String(parts[0]), String(parts[1])) : nil
+        })
+    }
+
+    @MainActor private func waitForExportSummary(_ app: XCUIApplication, containing text: String) -> Bool {
+        let predicate = NSPredicate(format: "value CONTAINS %@", text)
+        return XCTWaiter().wait(for: [expectation(for: predicate, evaluatedWith: element(app, "export-summary"))], timeout: 5) == .completed
+    }
+
+    @MainActor
+    func testExportWritesAOnePagePDFAndA2xPNGAndHonorsTheNotesOption() {
+        let app = makeApp(); app.launch()
+        XCTAssertTrue(element(app, "symbol-Main MCU").waitForExistence(timeout: 3))
+        chooseFileMenuItem(app, "書き出す（PDF・PNG）…")
+        XCTAssertTrue(waitForExportSummary(app, containing: "format=pdf"), "no PDF was produced")
+        let withNotes = exportSummary(app)
+        XCTAssertEqual(withNotes["pages"], "1")
+        XCTAssertTrue(element(app, "export-preview").exists)
+        XCTAssertTrue(app.buttons["export-save-to-files"].isEnabled)
+        let pdfWidth = Int(withNotes["width"] ?? "") ?? 0, pdfHeight = Int(withNotes["height"] ?? "") ?? 0
+        // The sample spans roughly x 75-665, y 30-420 on the canvas: cropped to it, not the whole 2400x1800.
+        XCTAssertTrue((600...800).contains(pdfWidth), "PDF width \(pdfWidth)")
+        XCTAssertTrue((400...560).contains(pdfHeight), "PDF height \(pdfHeight)")
+
+        // Without the note (which sits above everything else), the page is shorter.
+        let toggle = app.switches["export-include-notes"]
+        XCTAssertTrue(toggle.exists)
+        flip(toggle)
+        XCTAssertTrue(waitForExportSummary(app, containing: "format=pdf"))
+        let expectation = expectation(for: NSPredicate { _, _ in
+            (Int(self.exportSummary(app)["height"] ?? "") ?? .max) < pdfHeight
+        }, evaluatedWith: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 5), .completed, "\(self.exportSummary(app))")
+
+        // PNG: the same area, at 2x.
+        flip(toggle)
+        app.segmentedControls["export-format"].buttons["PNG"].tap()
+        XCTAssertTrue(waitForExportSummary(app, containing: "format=png"))
+        let png = exportSummary(app)
+        XCTAssertEqual(Int(png["width"] ?? ""), pdfWidth * 2)
+        XCTAssertEqual(Int(png["height"] ?? ""), pdfHeight * 2)
+        app.buttons["export-close"].tap()
+        XCTAssertTrue(element(app, "export-summary").waitForNonExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testExportOfABlankCanvasIsRefused() {
+        let app = makeApp()
+        app.launchEnvironment["UITEST_SEED_SAMPLE"] = "0"
+        app.launch()
+        chooseFileMenuItem(app, "書き出す（PDF・PNG）…")
+        XCTAssertTrue(waitForExportSummary(app, containing: "empty"), "a blank canvas must not produce a file")
+        XCTAssertTrue(app.staticTexts["キャンバスに何も配置されていないため、書き出せません。"].exists)
+        XCTAssertFalse(app.buttons["export-save-to-files"].isEnabled)
+        XCTAssertFalse(app.buttons["export-share"].exists)
+    }
 }

@@ -13,5 +13,6 @@ struct CircuitCanvasApp: App {
         WindowGroup {
             ContentView()
         }
+        .commands { DocumentCommands() }
     }
 }

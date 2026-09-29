@@ -196,8 +196,8 @@ enum SymbolKind: String, CaseIterable, Identifiable {
     }
     /// One of a block's pins: which edge, and which 30pt-tall row (0 = the top row). A block's own pin list is
     /// per-instance (SymbolItem.blockPins), not per-kind like `pinSpecs` - a block can grow pins one at a time.
-    struct BlockPin: Hashable {
-        enum Side { case left, right }
+    struct BlockPin: Hashable, Codable {
+        enum Side: String, Codable { case left, right }
         var side: Side
         var slot: Int
         var direction: WireRouting.Direction { side == .left ? .left : .right }
