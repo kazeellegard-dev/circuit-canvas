@@ -1535,7 +1535,9 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(pin("コンデンサ")[1], beforeMoveB[1], accuracy:2)
         app.buttons["redo-button"].tap()
         XCTAssertEqual(pin("抵抗")[0]-beforeMoveA[0], 30, accuracy:2, "redo must reapply the move to the dragged member")
+        XCTAssertEqual(pin("抵抗")[1]-beforeMoveA[1], 30, accuracy:2)
         XCTAssertEqual(pin("コンデンサ")[0]-beforeMoveB[0], 30, accuracy:2, "and to the other member, in the same single redo step")
+        XCTAssertEqual(pin("コンデンサ")[1]-beforeMoveB[1], 30, accuracy:2)
         app.buttons["undo-button"].tap()   // back to pre-move, to continue with delete below
         XCTAssertEqual(pin("抵抗")[0], beforeMoveA[0], accuracy:2)
 
