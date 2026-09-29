@@ -158,6 +158,12 @@ git diff "$BASE..$HEAD_REV" -- . ':!*.png' ':!*.ips' ':!*.xcresult' > "$RUN_DIR/
 git diff "$BASE..$HEAD_REV" -- CircuitCanvas/CircuitCanvasTests CircuitCanvas/CircuitCanvasUITests > "$RUN_DIR/tests-diff.patch"
 log "材料: diff $(wc -l < "$RUN_DIR/diff.patch") 行 / テストの diff $(wc -l < "$RUN_DIR/tests-diff.patch") 行"
 
+# レビューのラウンド（同じタスクで、承認されるまで何回目か）。承認でリセットする。
+# タスクファイルがないときは、タスク名を "default" として数える。runs/ は git 管理外。
+ROUND_KEY="$(basename "${TASK_FILE:-default}" .md)"
+ROUND_FILE="$LOOP_DIR/runs/round-$ROUND_KEY"
+ROUND=$(( $(cat "$ROUND_FILE" 2>/dev/null || echo 0) + 1 ))
+
 PROMPT="$RUN_DIR/review-prompt.md"
 {
   cat "$LOOP_DIR/codex-review-prompt.md"
@@ -176,6 +182,7 @@ PROMPT="$RUN_DIR/review-prompt.md"
   else
     echo "- ゲートの範囲: フルスイート"
   fi
+  echo "- レビューのラウンド: ${ROUND} 回目（同じタスクで承認されるまでの回数。3 回目以降は blocker のときだけ差し戻す）"
   if [[ -n "$TASK_FILE" ]]; then
     echo
     echo "# タスク（要件と受け入れ条件）"
@@ -212,10 +219,12 @@ RESULT_LINE="$(python3 "$REPO_ROOT/scripts/lib/review_to_md.py" "$REVIEW_JSON" "
 cp "$REVIEW_JSON" "$LOOP_DIR/review.json"
 cp "$GATE_MD" "$REVIEWS_DIR/gate-summary-${BASE_SHA}-${HEAD_SHA}-$(date +%Y-%m-%d).md"
 echo "$HEAD_SHA" > "$LAST_HEAD_FILE"
-log "レビュー結果: $RESULT_LINE"
+echo "$ROUND" > "$ROUND_FILE"
+log "レビュー結果（ラウンド $ROUND）: $RESULT_LINE"
 log "レポート: ${REPORT#$REPO_ROOT/}"
 
 if grep -q 'status=approve' <<<"$RESULT_LINE"; then
+  rm -f "$ROUND_FILE"
   notify "承認（$BASE_SHA..$HEAD_SHA）"
   exit 0
 fi
