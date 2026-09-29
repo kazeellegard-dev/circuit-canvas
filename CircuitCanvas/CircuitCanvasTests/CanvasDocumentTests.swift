@@ -32,8 +32,9 @@ import Testing
     @Test func writesAndReadsAFile() throws {
         let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).circuitcanvas")
         defer { try? FileManager.default.removeItem(at: url) }
-        try sample().write(to: url)
-        #expect(try CanvasDocument.read(from: url) == sample())
+        let document = sample()
+        try document.write(to: url)
+        #expect(try CanvasDocument.read(from: url) == document)
     }
 
     @Test func aNewerFormatIsReportedAsSuchNotAsBroken() throws {

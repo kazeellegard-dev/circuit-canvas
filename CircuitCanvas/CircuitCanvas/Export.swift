@@ -139,6 +139,15 @@ struct ExportSheet: View {
                 } footer: {
                     Text("オフにすると、実験メモと、メモの関連付けの線を除いて書き出します。")
                 }
+                Section {
+                    if let output {
+                        ShareLink(item: output.url) { Label("共有…", systemImage: "square.and.arrow.up") }
+                            .accessibilityIdentifier("export-share")
+                    }
+                    Button("ファイルに保存…", systemImage: "folder") { showFileExporter = true }
+                        .disabled(output == nil)
+                        .accessibilityIdentifier("export-save-to-files")
+                }
                 Section("プレビュー") {
                     if let output {
                         if let preview = output.preview {
@@ -155,19 +164,14 @@ struct ExportSheet: View {
                         Text("キャンバスに何も配置されていないため、書き出せません。")
                             .foregroundStyle(.secondary)
                     }
-                    Text("summary").font(.system(size: 1)).opacity(0.01)
-                        .accessibilityIdentifier("export-summary")
-                        .accessibilityValue(summaryValue)
                 }
-                Section {
-                    if let output {
-                        ShareLink(item: output.url) { Label("共有…", systemImage: "square.and.arrow.up") }
-                            .accessibilityIdentifier("export-share")
-                    }
-                    Button("ファイルに保存…", systemImage: "folder") { showFileExporter = true }
-                        .disabled(output == nil)
-                        .accessibilityIdentifier("export-save-to-files")
-                }
+            }
+            // Outside the Form: a lazily built Form leaves off-screen rows out of the accessibility tree.
+            .overlay(alignment: .bottomLeading) {
+                Text("summary").font(.system(size: 1)).opacity(0.01)
+                    .accessibilityIdentifier("export-summary")
+                    .accessibilityValue(summaryValue)
+                    .allowsHitTesting(false)
             }
             .navigationTitle("書き出し")
             .navigationBarTitleDisplayMode(.inline)
