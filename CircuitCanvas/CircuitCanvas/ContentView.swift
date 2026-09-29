@@ -187,6 +187,9 @@ struct ContentView: View {
         let wireID: UUID
         let segment: Int
         let origin: [CGPoint]
+        /// The latest requested move (canvas space, along the segment's normal), so the release can re-apply
+        /// it grid-snapped to `origin` rather than nudging the already-moved, possibly re-simplified route.
+        var delta: CGFloat = 0
     }
     private struct ResizeDrag { let id: UUID; let center: CGPoint; let size: CGSize }
     @State private var resizeDrag: ResizeDrag?
@@ -1639,7 +1642,9 @@ struct ContentView: View {
             }
             .onEnded { _ in
                 if activePanSource == .singleFinger { canvasPanOrigin = canvasOffset; activePanSource = nil }
-                segmentDrag = nil
+                // A short segment is grabbed through this background gesture instead of its own target, and
+                // must snap on release the same way (Codex major, 5F round 1).
+                endSegmentDrag()
                 isPanningCanvas = false
             }
     }
@@ -1992,6 +1997,7 @@ struct ContentView: View {
               let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
         let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
         let delta = (horizontal ? translation.height : translation.width) / canvasScale
+        segmentDrag?.delta = delta
         wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: delta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
@@ -2001,17 +2007,18 @@ struct ContentView: View {
     /// "free during drag, snap on release" timing as symbol/note/text drags.
     private func endSegmentDrag() {
         defer { segmentDrag = nil }
-        // The segment count can shrink mid-drag (WireRouting.moved straightens a step once the dragged
-        // side gets close enough to the other) - drag.segment, fixed at drag start, would then index past
-        // the end of the now-shorter points array.
-        guard gridSnapEnabled, let drag = segmentDrag, let i = wires.firstIndex(where: { $0.id == drag.wireID }),
-              drag.segment + 1 < wires[i].points.count else { return }
-        let a = wires[i].points[drag.segment], b = wires[i].points[drag.segment+1]
-        let horizontal = a.y == b.y
-        let current = horizontal ? a.y : a.x
-        let snappedValue = GridSnap.scalar(current)
-        guard snappedValue != current else { return }
-        wires[i].points = WireRouting.moved(wires[i].points, segment: drag.segment, delta: snappedValue - current, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
+        guard gridSnapEnabled, let drag = segmentDrag, let i = wires.firstIndex(where: { $0.id == drag.wireID }) else { return }
+        // A drag that straightened a step (WireRouting.moved aligned it onto a neighbouring parallel line and
+        // simplified the route) is kept as is, even if that line is off the grid: removing the step is the
+        // whole point of 5F, and snapping would only re-open it.
+        guard wires[i].points.count == drag.origin.count else { return }
+        // Re-applied to the drag's own starting route (Codex major, 5F round 1), where drag.segment is
+        // guaranteed to still index the dragged segment, rather than nudging the current, already-moved one.
+        let horizontal = drag.origin[drag.segment].y == drag.origin[drag.segment+1].y
+        let start = horizontal ? drag.origin[drag.segment].y : drag.origin[drag.segment].x
+        let snappedDelta = GridSnap.scalar(start + drag.delta) - start
+        guard snappedDelta != drag.delta else { return }
+        wires[i].points = WireRouting.moved(drag.origin, segment: drag.segment, delta: snappedDelta, bodies: bodies, minimumTerminalLead: max(terminalLead(at:wires[i].start), terminalLead(at:wires[i].end)))
         wires[i].manual = true
         wires[i].manualPoints = wires[i].points
     }

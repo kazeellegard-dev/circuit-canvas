@@ -18,13 +18,22 @@ final class CircuitCanvasUITests: XCTestCase {
         // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
     }
 
+    /// Every test launches through this, with grid snapping (5F) forced off unless the test opts back in:
+    /// the tests written before 5F place and drag by exact, deliberately off-grid amounts and assert those
+    /// exact coordinates, and `gridSnapEnabled` is otherwise a persisted, default-on preference.
+    private func makeApp(gridSnap: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["UITEST_GRID_SNAP"] = gridSnap ? "1" : "0"
+        return app
+    }
+
     override func tearDownWithError() throws {
         // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
     func testExperimentNoteCanBeDragged() throws {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         let note = app.descendants(matching: .any).matching(identifier: "experiment-note-R12を変更").firstMatch
@@ -45,7 +54,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNoteResizeHandlesSnappingAndMinimumSize() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         func size() -> [Double] {
@@ -130,7 +139,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNoteRelateButtonWorksWithoutOpeningTheInspector() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         XCTAssertFalse(element(app,"experiment-note-R12を変更-relate").exists)
@@ -208,7 +217,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testTappingTheBackgroundWhilePickingARelateCornerCancelsInsteadOfLeavingTheHintStuck() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -225,7 +234,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testZoomMenuOffersFixedPercentagesAndAppliesThemExactly() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         func scalePercent() -> Int? {
@@ -258,7 +267,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testZoomMenuKeepsTheViewportCenterEvenWhenAlreadyPannedNearTheEdge() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         func viewport() -> [Double] { (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
@@ -305,7 +314,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
@@ -331,7 +340,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// testOperationHintStaysFixedDuringZoomAndPan) - so this one always actually runs (Codex major, 4E round 3).
     @MainActor
     func testZoomMenuLandsExactlyOnAPresetFromAnInjectedNonPresetStartingScale() throws {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "0.73"
         app.launch()
         let canvas = element(app,"circuit-canvas")
@@ -346,7 +355,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testSettingsCanRenameCanvasAndEditAMultilineDescription() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(app.navigationBars["Circuit Canvas"].waitForExistence(timeout:3))
 
         app.buttons["設定"].tap()
@@ -372,7 +381,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testSettingsResetCancelledLeavesTheCanvasUntouched() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["設定"].tap()
         XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
@@ -390,7 +399,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testSettingsResetConfirmedClearsSymbolsWiresAndNotes() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["設定"].tap()
         XCTAssertTrue(app.navigationBars["設定"].waitForExistence(timeout:2))
@@ -417,7 +426,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoRedoOnASymbolMoveAndAfterANewOperationRedoIsCleared() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let symbol = element(app,"symbol-Main MCU")
         XCTAssertTrue(symbol.waitForExistence(timeout:3))
 
@@ -452,7 +461,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoStackIsCappedAtTwentySteps() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let symbol = element(app,"symbol-Main MCU")
         XCTAssertTrue(symbol.waitForExistence(timeout:3))
         let start = symbol.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
@@ -478,7 +487,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoRedoOnAddingASymbolANoteAndAWire() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
 
         // A symbol placed from the library (Codex major, 4D round 1: additions were not undoable at all).
@@ -515,7 +524,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoRedoOnDeletingAConnectedSymbolRestoresWireEndpointsAndRoutes() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:3))
         // Every initial wire touches Main MCU; capture all three routes to check they come back exactly.
         let before = (0..<3).map { routePoints(app,$0) }
@@ -542,7 +551,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoRedoOnWireSegmentDeletionStaysAvailableDuringEditMode() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"wire-0").waitForExistence(timeout:3))
         // All segments of every current wire, as an unordered set of endpoint pairs (see the equivalent
         // check in the 4C wire-deletion test) - used here to confirm the delete really happened, and that
@@ -575,7 +584,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testInspectorRenameAndAnIndependentActionAreSeparateUndoSteps() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app,category:"ブロック",name:"汎用ブロック",x:600,y:550)
         func size(_ title: String) -> [Double] { (element(app,"symbol-\(title)-size").value as? String ?? "").split(separator:",").compactMap{Double($0)} }
 
@@ -628,7 +637,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeGraysOutOtherToolsAndDeletesSymbolsNotesAndWireSegments() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         XCTAssertFalse(element(app,"edit-mode-badge").exists)
         XCTAssertFalse(element(app,"symbol-24 V → 5 V-edit-delete").exists)
@@ -685,7 +694,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeBlocksPlacingASymbolFromTheLibrary() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["edit-mode-toggle"].tap()
         XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
@@ -699,7 +708,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeWireDeletionRemovesOnlyTheTappedSegmentAndKeepsTheRest() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["edit-mode-toggle"].tap()
         XCTAssertTrue(element(app,"edit-mode-badge").waitForExistence(timeout:2))
@@ -748,7 +757,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testAddSymbolButtonSwitchesLibraryTabToTheSelectedCategory() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         // selectedLibrary defaults to a block; switch the visible tab away from it first.
         app.buttons["library-category-受動部品"].tap()
@@ -762,7 +771,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNewNoteDefaultsToMemoTypeAndIcon() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["＋メモ"].tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150)).tap()
@@ -774,7 +783,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNoteEditButtonOpensTheInspectorDirectly() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -787,7 +796,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNoteBodyAcceptsMultilineText() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -820,7 +829,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testNoteInspectorIsRenamedHasAMemoTypeAndAnIconPicker() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         // The initial note's icon matches its type (改造), same convention as a block's default icon.
@@ -846,7 +855,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testInspectorHasNoRotateOrRelateButtons() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -861,7 +870,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testDeletingNoteDoesNotCrash() throws {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         let note = app.descendants(matching: .any).matching(identifier: "experiment-note-R12を変更").firstMatch
@@ -878,7 +887,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testTextTabPlacesAPlainTextItemThatCanBeDraggedAndEditedInTheInspector() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
 
         app.buttons["library-category-テキスト"].tap()
@@ -921,7 +930,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeDeletesATextItemWithConfirmation() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
@@ -943,7 +952,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testPlacingATextItemClearsAPreviouslySelectedSymbol() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         element(app,"symbol-24 V → 5 V").tap()
         app.buttons["確認"].tap()
@@ -964,7 +973,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoRedoOnAddingAndDeletingATextItem() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
@@ -988,7 +997,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditingASymbolNameClosesInspectorBlocksOtherElementsUpdatesLiveAndReturnsOnDone() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-Main MCU").waitForExistence(timeout:3))
         element(app,"symbol-Main MCU").tap()
         app.buttons["確認"].tap()
@@ -1019,7 +1028,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditingANoteBodyBlocksDraggingItAndSavesOnDone() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -1054,7 +1063,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeToggleIsDisabledWhileLiveEditing() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let symbol = element(app,"symbol-Main MCU")
         XCTAssertTrue(symbol.waitForExistence(timeout:3))
         symbol.tap()
@@ -1070,7 +1079,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUndoIsDisabledWhileLiveEditingAFreshlyAddedItem() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
@@ -1092,7 +1101,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditingARotatedNonBlockSymbolNameHoleIncludesItsLabel() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:380, y:530)
         element(app,"symbol-抵抗").tap()
         // Rotate once (0° -> 90°): SymbolCard.label moves from below the body to its right - a case the
@@ -1112,7 +1121,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditingATextItemHoleGrowsWithLongerContent() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:500)).tap()
@@ -1136,7 +1145,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditInputCardNeverOverlapsATallExpandedNoteWhileEditingItsBody() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let note = element(app,"experiment-note-R12を変更")
         XCTAssertTrue(note.waitForExistence(timeout:3))
         note.tap()
@@ -1180,7 +1189,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testLiveEditingRemainsOperableForAMaxSizedNoteAtMaximumZoom() throws {
-        let app = XCUIApplication()
+        let app = makeApp()
         // UITEST_INITIAL_ZOOM (see ContentView's onAppear) starts the canvas at its maximum 2.5x scale -
         // XCUITest's synthetic pinch cannot reliably reach a non-preset scale in this harness, so this is the
         // established way an existing test opts into one (see the 4E zoom tests).
@@ -1239,7 +1248,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testGroupingViaMarqueeMergesPartiallyOverlappingItemsAndSelectingHidesIndividualEditingUI() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         // Encloses "24 V → 5 V" (120,160) and "Temperature" (120,390) - both merely brush the marquee's own
         // edges, not fully inside it, per this task's "一部でも重なった...対象" requirement.
@@ -1262,7 +1271,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testDraggingOneGroupedSymbolMovesTheOtherAndKeepsTheConnectingWireAttached() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         // "24 V → 5 V" (120,160) and "Main MCU" (370,250) are wired together by the seed diagram's wire-0 -
         // excludes the seed note (y ≤ 130) and CAN/Temperature (outside this rectangle).
         groupViaMarquee(app, from: CGVector(dx:60,dy:140), to: CGVector(dx:420,dy:320))
@@ -1296,7 +1305,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testEditModeOnlyDeletesTheWholeGroupNotIndividualMembers() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:700, y:500)
         place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
         groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
@@ -1318,7 +1327,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testUngroupingRestoresIndividualSelectionAndEditing() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:700, y:500)
         place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
         groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
@@ -1338,7 +1347,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testGroupingAnItemAlreadyInAGroupWidensItInsteadOfNesting() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:700, y:500)
         place(app, category:"受動部品", name:"コンデンサ", x:700, y:580)
         place(app, category:"受動部品", name:"コイル", x:700, y:660)
@@ -1364,7 +1373,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// major, 5E round 1: the original tests only ever started their marquees from empty space).
     @MainActor
     func testGroupSelectionMarqueeCanStartOnTopOfAnItem() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         app.buttons["group-mode-toggle"].tap()
         let start = element(app,"symbol-24 V → 5 V").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
@@ -1378,7 +1387,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testWirePinOnAGroupedSymbolCannotBeReconnectedDirectlyOrViaANearbyBackgroundTap() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         // "24 V → 5 V" (120,160) + "Main MCU" (370,250) - excludes the seed note and CAN/Temperature.
         groupViaMarquee(app, from: CGVector(dx:60,dy:140), to: CGVector(dx:420,dy:320))
         XCTAssertFalse((element(app,"symbol-24 V → 5 V-group").value as? String ?? "").isEmpty)
@@ -1403,7 +1412,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// unverified, since the old approximation would have matched it too).
     @MainActor
     func testGroupSelectionMarqueeUsesATextItemsRealMeasuredWidthNotAFixedApproximation() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:300,dy:500)).tap()
@@ -1436,7 +1445,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// symbol - the original 6 tests were all-symbol groups only (Codex major, 5E round 1).
     @MainActor
     func testMixedGroupMovesAllMemberTypesTogetherAndKeepsAnExternalWireAttachedWhileTheOtherEndStaysPut() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         // A note and a text placed near "CAN" (620,250), which the seed diagram wires to "Main MCU" (370,250)
         // - well outside the marquee below, so that wire's far end must stay fixed while the near end moves.
         app.buttons["＋メモ"].tap()
@@ -1500,7 +1509,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// round 1: the original version of this test stopped there).
     @MainActor
     func testUndoRedoOnGroupingUngroupingMovingAndDeletingAGroup() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app, category:"受動部品", name:"抵抗", x:700, y:500)
         place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
         groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
@@ -1622,7 +1631,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testWireToolConnectsPinsAndRejectsDuplicatesBothWays() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         connectTemperatureToCAN(app)
         XCTAssertFalse(element(app, "wire-4").exists)
         let pins = ["symbol-Temperature-pin-1", "symbol-CAN-pin-0"]
@@ -1637,7 +1646,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testStartPinSelectionResetsAndIsReusedWithoutStrayWires() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let temperatureRight = app.buttons["symbol-Temperature-pin-1"]
         let temperatureLeft = app.buttons["symbol-Temperature-pin-0"]
         let canRight = app.buttons["symbol-CAN-pin-1"]
@@ -1681,7 +1690,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testPinCentersMatchAndWireEndpointsFollowBothDraggedSymbols() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
         connectTemperatureToCAN(app)
         for name in ["Temperature", "CAN"] {
@@ -1725,7 +1734,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testDeletingSymbolRemovesNewlyAddedWire() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
         connectTemperatureToCAN(app)
         let temperature = element(app, "symbol-Temperature")
@@ -1742,7 +1751,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testOperationHintStaysFixedDuringZoomAndPan() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app, "circuit-canvas")
         for button in ["配線", "＋メモ", "＋シンボル"] {
             app.buttons[button].tap()
@@ -1877,7 +1886,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testRequestedRoutesAndSymbolMovementAvoidBodiesAndOverlaps() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         assertRoutesClear(app,count:3)
         let pairs = [("Temperature",1,"CAN",0),("Temperature",1,"Main MCU",1),("24 V → 5 V",0,"Main MCU",0)]
         for (i,pair) in pairs.enumerated() {
@@ -1906,7 +1915,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testCloseSymbolsRetainMaximumAvailableLead() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let source = element(app,"symbol-CAN").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:-130,dy:0)))
         app.buttons["配線"].tap()
@@ -1923,7 +1932,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testJunctionsTrackSharedPinsAndSegmentDrags() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let dots = element(app,"canvas-junctions")
         XCTAssertEqual(dots.value as? String,"301.0,250.0")
         XCTAssertEqual(element(app,"wire-0-hops").value as? String,"")
@@ -1955,7 +1964,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testSegmentDragKeepsEndpointsViewportCountAndManualPosition() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let before = routePoints(app,0)
         let viewport = element(app,"circuit-canvas").value as? String
         let endpoint = coordinates(element(app,"wire-0"))
@@ -1984,7 +1993,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testSegmentDragStopsAtBodyBoundary() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let target = element(app,"wire-0-segment-1")
         let source = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
         source.press(forDuration:0.2,thenDragTo:source.withOffset(CGVector(dx:200,dy:0)))
@@ -2007,7 +2016,7 @@ final class CircuitCanvasUITests: XCTestCase {
     ///  - finally the crossing arc appears and disappears without changing endpoints.
     @MainActor
     func testShortHorizontalLineDragsAndCrossings() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         func drag(_ id: String, _ dx: CGFloat, _ dy: CGFloat) {
             let target = element(app,id)
             XCTAssertTrue(target.isHittable, id)
@@ -2082,7 +2091,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testBlankCanvasDragCrossingLineRemainsPan() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let before = routePoints(app,2)
         let canvas = element(app,"circuit-canvas")
         let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:291,dy:473))
@@ -2104,14 +2113,14 @@ final class CircuitCanvasUITests: XCTestCase {
         // that the recognizer attached to a window at all, not left silently failing the same way again.
         // The behaviour itself (does a real two-finger drag pan the canvas) needs manual/simulator-tool
         // verification instead - see this task's doc for how that was recorded.
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         XCTAssertTrue(element(app,"two-finger-pan-attached").waitForExistence(timeout:3))
         XCTAssertEqual(element(app,"two-finger-pan-attached").value as? String,"true")
     }
 
     @MainActor
     func testPanModeToggleEnablesThenDisablesOneFingerCanvasPanning() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         app.buttons["pan-mode-toggle"].tap()
@@ -2128,7 +2137,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testOneFingerDragOnBlankCanvasDoesNothingOutsidePanMode() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         let before = canvas.value as? String
         let source = canvas.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:150))
@@ -2174,7 +2183,7 @@ final class CircuitCanvasUITests: XCTestCase {
             ("負荷・その他",["ランプ","モーター","スピーカー","水晶振動子","電圧計","電流計"]),
             ("リレー・コネクタ",["リレー","コネクタ"])
         ]
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         var placed: [(category: String, name: String, x: CGFloat, y: CGFloat)] = []
         var horizontalCount = 0
         for (category,names) in groups {
@@ -2215,7 +2224,7 @@ final class CircuitCanvasUITests: XCTestCase {
         app.terminate()
 
         // Blocks (3B): only one kind in the library now ("汎用ブロック"); name and icon are chosen afterwards.
-        let blockApp = XCUIApplication(); blockApp.launch()
+        let blockApp = makeApp(); blockApp.launch()
         blockApp.buttons["library-category-ブロック"].tap()
         XCTAssertTrue(blockApp.buttons["library-汎用ブロック"].exists)
         XCTAssertFalse(blockApp.buttons["library-DC/DC"].exists)
@@ -2240,7 +2249,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// wires, follows a move/resize, and rotation of a pin's side survives a resize whose height changes.
     @MainActor
     func testBlockPinAdditionAppearsOnEmptySlotsAndTheNewPinWorks() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app,category:"ブロック",name:"汎用ブロック",x:400,y:550)
         // Not selected: no "+" anywhere.
         XCTAssertFalse(element(app,"symbol-汎用ブロック-add-pin-left-0").exists)
@@ -2348,7 +2357,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testGenericBlockCanBeRenamedAndGivenAnIconFromTheInspector() throws {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         // The initial diagram's blocks are all "汎用ブロック" underneath, but keep their original look.
         for (name, icon) in [("24 V → 5 V","bolt.fill"),("Main MCU","cpu"),("CAN","arrow.left.and.right"),("Temperature","sensor.tag.radiowaves.forward")] {
             XCTAssertEqual(element(app,"symbol-\(name)-icon").value as? String,icon,name)
@@ -2377,7 +2386,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testCircuitWiringSelfRejectionMovementAndGroundDeletion() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         for name in ["24 V → 5 V","Main MCU","CAN","Temperature"] {
             XCTAssertTrue((element(app,"symbol-\(name)").value as? String ?? "").contains("style=block"))
         }
@@ -2416,7 +2425,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testCircuitRotationControlsPreserveCenterAndWiring() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         element(app,"symbol-Main MCU").tap()
         XCTAssertFalse(app.buttons["symbol-Main MCU-rotate"].exists)
         place(app,category:"受動部品",name:"抵抗",x:380,y:530)
@@ -2464,7 +2473,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// and a one-pitch drag (30pt) that must not send a wire to another pin.
     @MainActor
     func testMultiTerminalWiringAdjacentPinsRotationAndMove() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let connector = CGPoint(x:200,y:700), transistor = CGPoint(x:520,y:700)
         place(app,category:"リレー・コネクタ",name:"コネクタ",x:connector.x,y:connector.y)
         place(app,category:"半導体",name:"NPNトランジスタ",x:transistor.x,y:transistor.y)
@@ -2554,7 +2563,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// pins in the first row slot, attached wires following, circuit symbols without handles, and the reset.
     @MainActor
     func testBlockResizeHandlesSnappingLimitsWiresAndReset() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         func size(_ name: String) -> [Double] { coordinates(element(app,"symbol-\(name)-size")) }
         func drag(_ corner: String, _ dx: CGFloat, _ dy: CGFloat) {
             let handle = element(app,"symbol-Main MCU-resize-\(corner)")
@@ -2652,7 +2661,7 @@ final class CircuitCanvasUITests: XCTestCase {
     /// straightens it into a single segment; the route then still follows its moved end.
     @MainActor
     func testDraggingOneSideOfAStepStraightensTheWire() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         let before = routePoints(app,2)
         guard before.count == 6 else { return XCTFail("wire 2 should start with a step: \(before)") }
         XCTAssertEqual(before[1].x,289); XCTAssertEqual(before[3].x,301)
@@ -2680,7 +2689,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testVerticalPowerSegmentDragBranchAndRotation() {
-        let app = XCUIApplication(); app.launch()
+        let app = makeApp(); app.launch()
         place(app,category:"電源",name:"直流電源",x:300,y:530)
         place(app,category:"電源",name:"GND",x:650,y:530)
         app.buttons["配線"].tap()
@@ -2722,9 +2731,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testPlacingASymbolNoteAndTextSnapsThePositionToTheGrid() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
-        app.launch()
+        let app = makeApp(gridSnap: true); app.launch()
         XCTAssertTrue(element(app,"symbol-24 V → 5 V").waitForExistence(timeout:3))
         func position(_ value: String?) -> [Double] {
             (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
@@ -2753,9 +2760,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testDraggingASymbolNoteOrTextSnapsToTheGridOnRelease() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
-        app.launch()
+        let app = makeApp(gridSnap: true); app.launch()
         func position(_ value: String?) -> [Double] {
             (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
         }
@@ -2790,12 +2795,10 @@ final class CircuitCanvasUITests: XCTestCase {
 
     @MainActor
     func testGridSnapToggleInSettingsControlsWhetherDraggingSnaps() throws {
-        let app = XCUIApplication()
-        // Forced at launch (see UITEST_GRID_SNAP in ContentView.onAppear) rather than relying on the
-        // Settings toggle's default - gridSnapEnabled is an @AppStorage preference, so an ambient value
-        // left over from another test run must not affect whether this test starts "off".
-        app.launchEnvironment["UITEST_GRID_SNAP"] = "0"
-        app.launch()
+        // Forced off at launch (makeApp, via UITEST_GRID_SNAP) rather than relying on the Settings toggle's
+        // default - gridSnapEnabled is an @AppStorage preference, so an ambient value left over from another
+        // test run must not affect whether this test starts "off".
+        let app = makeApp(gridSnap: false); app.launch()
         func position(_ value: String?) -> [Double] {
             (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
         }
@@ -2828,34 +2831,97 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(onFifteenPointGrid(onResult[0]) && onFifteenPointGrid(onResult[1]), "after turning grid snap on, a drag must land on the 15pt grid: \(onResult)")
     }
 
+    /// Drags the first interior segment of each orientation on a fresh wire to 3pt past the grid line two
+    /// lines (30pt) away, towards the wire's middle - well over the segment gesture's 4pt minimum, so a drag that never happened cannot
+    /// pass - and checks where it ends up: on that exact line with snapping on, 3pt off it with snapping off.
     @MainActor
-    func testDraggingAWireSegmentSnapsItsSharedCoordinateToTheGridOnRelease() throws {
-        let app = XCUIApplication()
-        app.launchEnvironment["UITEST_GRID_SNAP"] = "1"
-        app.launch()
-        // A fresh, isolated connection - not one of the seed wires - so this test does not depend on
-        // WireRouting's own step-straightening proximity threshold incidentally kicking in.
+    private func dragWireSegments(snap: Bool) {
+        let app = makeApp(gridSnap: snap); app.launch()
+        // A fresh, isolated connection - not one of the seed wires, whose steps sit close enough together
+        // for WireRouting's step-straightening alignment to take over.
         place(app, category:"受動部品", name:"抵抗", x:300, y:700)
         place(app, category:"受動部品", name:"コンデンサ", x:600, y:850)
         app.buttons["配線"].tap()
         app.buttons["symbol-抵抗-pin-1"].tap()
         app.buttons["symbol-コンデンサ-pin-0"].tap()
 
-        let before = routePoints(app,3)
-        let interior = before.count > 3 ? Array(1..<(before.count-2)) : []
-        guard let segment = interior.first else { return XCTFail("expected an interior (draggable) segment on the new wire: \(before)") }
-        let a = before[segment], b = before[segment+1]
-        let horizontal = a.y == b.y
-        let target = element(app,"wire-3-segment-\(segment)")
-        XCTAssertTrue(target.waitForExistence(timeout:2))
-        let start = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        // A small, deliberately off-grid nudge (3pt) - the point is to prove the release rounds it to the
-        // grid, not that a large move happens to land there anyway.
-        start.press(forDuration:0.2,thenDragTo:start.withOffset(horizontal ? CGVector(dx:0,dy:3) : CGVector(dx:3,dy:0)))
+        let initial = routePoints(app,3)
+        let interior = initial.count > 3 ? Array(1..<(initial.count-2)) : []
+        let firstOfEach = [true, false].compactMap { horizontal in interior.first { (initial[$0].y == initial[$0+1].y) == horizontal } }
+        XCTAssertFalse(firstOfEach.isEmpty, "expected an interior (draggable) segment on the new wire: \(initial)")
+        for segment in firstOfEach {
+            let before = routePoints(app,3)
+            let horizontal = before[segment].y == before[segment+1].y
+            let from = horizontal ? before[segment].y : before[segment].x
+            // Towards the middle of the wire: the other way would soon shorten a pin's lead-out below its
+            // minimum, which WireRouting.moved refuses - leaving the segment where it was.
+            let middle = horizontal ? (before.first!.y+before.last!.y)/2 : (before.first!.x+before.last!.x)/2
+            let direction: CGFloat = middle < from ? -1 : 1
+            let gridLine = (from/15).rounded()*15 + 30*direction
+            let amount = gridLine + 3*direction - from
+            let target = element(app,"wire-3-segment-\(segment)")
+            XCTAssertTrue(target.waitForExistence(timeout:2))
+            let start = target.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+            start.press(forDuration:0.2,thenDragTo:start.withOffset(horizontal ? CGVector(dx:0,dy:amount) : CGVector(dx:amount,dy:0)))
 
-        let after = routePoints(app,3)
-        guard segment+1 < after.count else { return XCTFail("the dragged segment vanished after the drag: \(after)") }
-        let value = horizontal ? after[segment].y : after[segment].x
-        XCTAssertEqual(value.truncatingRemainder(dividingBy: 15), 0, accuracy: 0.5, "the dragged segment's shared coordinate must land on the 15pt grid: \(value)")
+            let after = routePoints(app,3)
+            guard after.count == before.count else { return XCTFail("the drag must not have reshaped the route: \(before) -> \(after)") }
+            let value = horizontal ? after[segment].y : after[segment].x
+            if snap {
+                XCTAssertEqual(value, gridLine, accuracy: 0.5, "a \(horizontal ? "horizontal" : "vertical") segment must land on the nearest grid line: \(before) -> \(after)")
+            } else {
+                XCTAssertEqual(value, gridLine + 3*direction, accuracy: 1.5, "with snapping off, the segment must stay where it was released: \(before) -> \(after)")
+            }
+            XCTAssertEqual(after.first, before.first); XCTAssertEqual(after.last, before.last)
+        }
+    }
+
+    @MainActor
+    func testDraggingAWireSegmentSnapsItsSharedCoordinateToTheGridOnRelease() throws {
+        dragWireSegments(snap: true)
+    }
+
+    @MainActor
+    func testDraggingAWireSegmentWithGridSnapOffKeepsTheReleasedCoordinate() throws {
+        dragWireSegments(snap: false)
+    }
+
+    /// A group whose members both start off the grid (the seed "CAN" block at 620,250 and the seed note at
+    /// 430,80) snaps each member to its own nearest grid point on release, keeps its external wire attached,
+    /// and a single Undo restores every member - and the wire - to exactly where they were (Codex minor, 5F
+    /// round 1).
+    @MainActor
+    func testDraggingAGroupSnapsEachMemberAndOneUndoRestoresThemAll() throws {
+        let app = makeApp(gridSnap: true); app.launch()
+        XCTAssertTrue(element(app,"symbol-CAN").waitForExistence(timeout:3))
+        groupViaMarquee(app, from: CGVector(dx:700,dy:300), to: CGVector(dx:440,dy:60))
+        let groupID = element(app,"symbol-CAN-group").value as? String ?? ""
+        XCTAssertFalse(groupID.isEmpty)
+        XCTAssertEqual(groupID, element(app,"experiment-note-R12を変更-group").value as? String)
+        XCTAssertEqual(element(app,"symbol-Main MCU-group").value as? String, "", "Main MCU must stay outside the group")
+
+        func position(_ value: String?) -> [Double] {
+            (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
+        }
+        func pin(_ title: String, _ index: Int) -> [Double] { coordinates(app.buttons["symbol-\(title)-pin-\(index)"]) }
+        let note = element(app,"experiment-note-R12を変更")
+        let noteBefore = position(note.value as? String), canPinBefore = pin("CAN",0), wireBefore = routePoints(app,1)
+        XCTAssertFalse(onFifteenPointGrid(noteBefore[0]) && onFifteenPointGrid(noteBefore[1]), "the note must start off the grid: \(noteBefore)")
+
+        let handle = element(app,"symbol-CAN").coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        handle.press(forDuration:0.2, thenDragTo: handle.withOffset(CGVector(dx:37,dy:23)))
+
+        let noteAfter = position(note.value as? String), canPinAfter = pin("CAN",0)
+        XCTAssertTrue(onFifteenPointGrid(noteAfter[0]) && onFifteenPointGrid(noteAfter[1]), "the note member must land on the grid: \(noteAfter)")
+        XCTAssertTrue(onFifteenPointGrid(canPinAfter[0]) && onFifteenPointGrid(canPinAfter[1]), "the symbol member's pin must land on the grid: \(canPinAfter)")
+        XCTAssertEqual(noteAfter[0]-noteBefore[0], 37, accuracy: 7.5); XCTAssertEqual(noteAfter[1]-noteBefore[1], 23, accuracy: 7.5)
+        let wireAfter = routePoints(app,1)
+        XCTAssertEqual(wireAfter.last.map { [Double($0.x),Double($0.y)] }, canPinAfter, "the external wire must stay attached to the snapped pin")
+        XCTAssertEqual(wireAfter.first, wireBefore.first, "the wire's far end (Main MCU, outside the group) must not move")
+
+        app.buttons["undo-button"].tap()
+        XCTAssertEqual(position(note.value as? String), noteBefore, "one Undo must restore the note, snap included")
+        XCTAssertEqual(pin("CAN",0), canPinBefore, "and the symbol, in the same single step")
+        XCTAssertEqual(routePoints(app,1), wireBefore, "and the wire's route")
     }
 }
