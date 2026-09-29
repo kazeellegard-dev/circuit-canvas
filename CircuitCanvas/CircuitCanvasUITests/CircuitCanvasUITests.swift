@@ -1161,6 +1161,16 @@ final class CircuitCanvasUITests: XCTestCase {
         let hole = parseRect(element(app,"live-edit-hole").value as? String ?? "")
         let card = parseRect(element(app,"live-edit-card-rect").value as? String ?? "")
         XCTAssertFalse(hole.intersects(card), "the input card must never overlap the item being edited, even when it has grown tall")
+        // Non-overlap alone would also pass a card pushed off past the viewport's own edge (the documented
+        // last-resort trade-off for a hole that leaves no side with room for even the card's minimum size) -
+        // a note at its ordinary maximum height, on a real iPad viewport, must never actually hit that
+        // trade-off and must stay fully reachable on screen (Codex minor, 5D round 4).
+        let viewportParts = (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap { Double($0) }
+        XCTAssertEqual(viewportParts.count,2,"could not read viewport-size")
+        if viewportParts.count == 2 {
+            let viewport = CGRect(x:0,y:0,width:viewportParts[0],height:viewportParts[1])
+            XCTAssertTrue(viewport.contains(card),"the input card must stay fully on screen for a realistically-sized note, not just avoid the hole")
+        }
         app.buttons["live-edit-done"].tap()
     }
 

@@ -1192,31 +1192,39 @@ struct ContentView: View {
 
         if let p = tryAllSides(preferredSize) { return (p, preferredSize) }
 
+        // liveEditCard has a hard floor (the SAME LiveEditCardMetrics.minimumCardSize) below which it will
+        // not actually render any smaller - a requested size below that floor would just be wrong, since the
+        // real card ignores it and renders at the floor anyway, which is exactly how a previous version of
+        // this fallback (shrinking to "whatever room is left", even below the floor) could still end up
+        // overlapping the hole despite believing it had shrunk to fit (Codex major, 5D round 4).
         let minimumSize = LiveEditCardMetrics.minimumCardSize(multiline: multiline)
         if let p = tryAllSides(minimumSize) { return (p, minimumSize) }
 
-        // Not even the minimum fits on any side: shrink into whichever has the most room, clamped to EXACTLY
-        // that much (never a hand-picked floor bigger than the room available) - the card at this point is
-        // smaller than is comfortably usable, but is, by construction, still not overlapping the hole.
+        // Not even the minimum fits fully on screen on any side (Codex major, 5D round 2's own counter-
+        // example: a hole tall/wide enough relative to the viewport that no side has minimumSize's worth of
+        // clearance) - place the minimum-size card by the SAME hole-relative formula the checked candidates
+        // above used, but without the "stays fully on screen" guard. That formula positions the card strictly
+        // outside the hole along the axis it was placed on (e.g. below: y = hole.maxY + margin + halfH) -
+        // unconditionally, regardless of the viewport's own bounds - so it still cannot overlap the hole. The
+        // trade-off in this practically-unreachable corner (this app's largest items are nowhere near a
+        // typical iPad viewport's own size) is that the card may extend past the viewport's edge instead of
+        // being squeezed smaller than it can actually render.
         let belowAvail = viewportSize.height - hole.maxY - 2 * margin
         let aboveAvail = hole.minY - 2 * margin
         let rightAvail = viewportSize.width - hole.maxX - 2 * margin
         let leftAvail = hole.minX - 2 * margin
         let bySide = ["below": belowAvail, "above": aboveAvail, "right": rightAvail, "left": leftAvail]
         let side = bySide.max { $0.value < $1.value }!.key
+        let halfW = minimumSize.width / 2, halfH = minimumSize.height / 2
         switch side {
         case "below":
-            let size = CGSize(width: preferredSize.width, height: max(0, belowAvail))
-            return (vertical(size: size, below: true) ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height - size.height / 2 - margin), size)
+            return (CGPoint(x: crossClamped(hole.midX, half: halfW, in: viewportSize.width), y: hole.maxY + margin + halfH), minimumSize)
         case "above":
-            let size = CGSize(width: preferredSize.width, height: max(0, aboveAvail))
-            return (vertical(size: size, below: false) ?? CGPoint(x: viewportSize.width / 2, y: size.height / 2 + margin), size)
+            return (CGPoint(x: crossClamped(hole.midX, half: halfW, in: viewportSize.width), y: hole.minY - margin - halfH), minimumSize)
         case "right":
-            let size = CGSize(width: max(0, rightAvail), height: preferredSize.height)
-            return (horizontal(size: size, right: true) ?? CGPoint(x: viewportSize.width - size.width / 2 - margin, y: viewportSize.height / 2), size)
+            return (CGPoint(x: hole.maxX + margin + halfW, y: crossClamped(hole.midY, half: halfH, in: viewportSize.height)), minimumSize)
         default:
-            let size = CGSize(width: max(0, leftAvail), height: preferredSize.height)
-            return (horizontal(size: size, right: false) ?? CGPoint(x: size.width / 2 + margin, y: viewportSize.height / 2), size)
+            return (CGPoint(x: hole.minX - margin - halfW, y: crossClamped(hole.midY, half: halfH, in: viewportSize.height)), minimumSize)
         }
     }
     private func selectWirePin(_ pin: CGPoint) {
