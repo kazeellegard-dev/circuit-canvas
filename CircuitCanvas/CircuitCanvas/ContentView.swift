@@ -52,6 +52,31 @@ private struct LiveEditFrameKey: PreferenceKey {
         if let next = nextValue() { value = next }
     }
 }
+/// The live-edit input card's own real, currently-laid-out frame - exposed to tests so a non-overlap check
+/// verifies what actually rendered (fixed field minimums, internal padding, the button row) rather than the
+/// pre-layout size/position this file computed for it, which could itself be wrong (Codex major, 5D round 3).
+private struct LiveEditCardFrameKey: PreferenceKey {
+    static var defaultValue: CGRect?
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
+    }
+}
+/// The live-edit input card's fixed chrome and minimum usable field size - shared by `liveEditCard` (which
+/// renders it) and `liveEditCardPlacement` (which decides how far it may shrink before that would produce a
+/// card smaller than this view can actually render, and so a "shrink to fit" that quietly overlapped the
+/// hole anyway) (Codex major, 5D round 3).
+private enum LiveEditCardMetrics {
+    static let outerPadding: CGFloat = 24              // 12pt on each side of the card's own .padding
+    static let spacing: CGFloat = 8                    // VStack(spacing:) between the field and the button
+    static let doneButtonHeight: CGFloat = 44          // .buttonStyle(.borderedProminent), default control size
+    static let minFieldWidth: CGFloat = 80
+    static let minMultilineFieldHeight: CGFloat = 60
+    static let singleLineFieldHeight: CGFloat = 36     // .textFieldStyle(.roundedBorder) intrinsic height
+    static func minimumCardSize(multiline: Bool) -> CGSize {
+        let fieldHeight = multiline ? minMultilineFieldHeight : singleLineFieldHeight
+        return CGSize(width: minFieldWidth + outerPadding, height: fieldHeight + spacing + doneButtonHeight + outerPadding)
+    }
+}
 private enum NoteType: String, CaseIterable, Identifiable {
     case modification = "改造", measurement = "測定", confirmation = "確認", unresolved = "未解決", caution = "注意", memo = "メモ"
     var id: Self { self }
@@ -182,6 +207,8 @@ struct ContentView: View {
     /// pass reports it (or if the target does not need measuring - a block symbol's title, and a note's
     /// title/body, all have exactly known bounds already and never populate this).
     @State private var liveEditMeasuredFrame: CGRect?
+    /// The input card's own measured frame, via LiveEditCardFrameKey - nil until the first layout pass.
+    @State private var liveEditMeasuredCardFrame: CGRect?
     @State private var undoStack: [CanvasSnapshot] = []
     @State private var redoStack: [CanvasSnapshot] = []
     @State private var undoRedoUnavailableReason: String?
@@ -468,7 +495,7 @@ struct ContentView: View {
                 // sits just below (or, if that would run off-screen, above) that hole, never on top of it.
                 if let target = liveEdit, let binding = liveEditBinding(for: target) {
                     let hole = liveEditTargetRect(for: target, viewportSize: proxy.size)
-                    let placement = liveEditCardPlacement(near: hole, preferredSize: liveEditCardSize(target), viewportSize: proxy.size)
+                    let placement = liveEditCardPlacement(near: hole, preferredSize: liveEditCardSize(target), multiline: liveEditIsMultiline(target), viewportSize: proxy.size)
                     ScrimWithHole(hole: hole)
                         .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
                         .frame(width: proxy.size.width, height: proxy.size.height)
@@ -478,15 +505,37 @@ struct ContentView: View {
                     // Hidden exposure of the computed hole and card rects (Codex round 2 fix verification) -
                     // lets a UI test confirm the hole actually grew to include a non-block symbol's label or
                     // a long text body, and that the card never overlaps it, without screenshot comparison.
+                    // "x=..;y=..;w=..;h=.." rather than plain comma-joined numbers: a value that reads as a
+                    // pure number can come back from XCUITest with locale grouping separators inserted into
+                    // it (e.g. "2400" as "2,400"), which silently corrupts a naive comma-split for any
+                    // viewport-scale value at or past 1000 - not hypothetical here, since a hole or card rect
+                    // routinely lands in that range on a real iPad viewport.
                     Text("hole").font(.system(size:1)).opacity(0.01)
                         .accessibilityIdentifier("live-edit-hole")
-                        .accessibilityValue("\(Int(hole.minX)),\(Int(hole.minY)),\(Int(hole.width)),\(Int(hole.height))")
+                        .accessibilityValue("x=\(Int(hole.minX));y=\(Int(hole.minY));w=\(Int(hole.width));h=\(Int(hole.height))")
                         .allowsHitTesting(false)
+                    // The card's own REAL rendered frame, not the pre-layout size/position this file computed
+                    // for it - a UI test asserting non-overlap against the computed value alone could never
+                    // catch this view's own layout (fixed field minimums, internal padding, the button row)
+                    // quietly rendering larger than that computation assumed (Codex major, 5D round 3). Falls
+                    // back to the computed rect for the one render before the first measurement arrives.
+                    let measuredCardRect = liveEditMeasuredCardFrame ?? CGRect(
+                        x: placement.position.x - placement.size.width/2, y: placement.position.y - placement.size.height/2,
+                        width: placement.size.width, height: placement.size.height)
                     Text("card").font(.system(size:1)).opacity(0.01)
                         .accessibilityIdentifier("live-edit-card-rect")
-                        .accessibilityValue("\(Int(placement.position.x - placement.size.width/2)),\(Int(placement.position.y - placement.size.height/2)),\(Int(placement.size.width)),\(Int(placement.size.height))")
+                        .accessibilityValue("x=\(Int(measuredCardRect.minX));y=\(Int(measuredCardRect.minY));w=\(Int(measuredCardRect.width));h=\(Int(measuredCardRect.height))")
                         .allowsHitTesting(false)
+                    // The background(GeometryReader) is attached BEFORE .position() (mirroring TextCard's own
+                    // measurement above), not after: a positioned view reports its size as however much space
+                    // its parent proposes to it, not its own true content size - a GeometryReader chained
+                    // after .position() ends up measuring that inflated proposal (in this ZStack, the whole
+                    // viewport) instead of the card's own real footprint.
                     liveEditCard(text: binding, multiline: liveEditIsMultiline(target), size: placement.size)
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: LiveEditCardFrameKey.self, value: proxy.frame(in: .named("editorViewport")))
+                        })
+                        .onPreferenceChange(LiveEditCardFrameKey.self) { liveEditMeasuredCardFrame = $0 }
                         .position(placement.position)
                 }
             }
@@ -884,16 +933,18 @@ struct ContentView: View {
     /// `size` is the card's outer footprint, exactly as liveEditCardPlacement computed it (shrunk from the
     /// preferred size when space was tight) - the field itself is sized to fit inside that, so the card
     /// never renders larger than the space that was confirmed not to overlap the target's hole (Codex
-    /// major, 5D round 2).
+    /// major, 5D round 2). Every dimension here is drawn from LiveEditCardMetrics, the SAME constants
+    /// liveEditCardPlacement uses to decide how small this card is allowed to shrink - the two had drifted
+    /// apart before (a separately hand-picked "60"/"80" here vs. the placement code's own minimum), letting
+    /// the rendered card end up bigger than the space that was confirmed clear of the hole (Codex major, 5D
+    /// round 3).
     private func liveEditCard(text: Binding<String>, multiline: Bool, size: CGSize) -> some View {
-        let outerPadding: CGFloat = 24
-        let fieldWidth = max(80, size.width - outerPadding)
-        return VStack(spacing: 8) {
+        let fieldWidth = max(LiveEditCardMetrics.minFieldWidth, size.width - LiveEditCardMetrics.outerPadding)
+        return VStack(spacing: LiveEditCardMetrics.spacing) {
             if multiline {
-                let doneRowHeight: CGFloat = 44
                 TextEditor(text: text)
-                    .frame(width: fieldWidth, height: max(60, size.height - outerPadding - doneRowHeight))
-                    .padding(4)
+                    .frame(width: fieldWidth, height: max(LiveEditCardMetrics.minMultilineFieldHeight,
+                        size.height - LiveEditCardMetrics.outerPadding - LiveEditCardMetrics.spacing - LiveEditCardMetrics.doneButtonHeight))
                     .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 6))
                     .accessibilityIdentifier("live-edit-field")
             } else {
@@ -907,7 +958,7 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("live-edit-done")
         }
-        .padding(12)
+        .padding(LiveEditCardMetrics.outerPadding / 2)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2))
     }
@@ -1033,12 +1084,14 @@ struct ContentView: View {
     /// as before this feature existed.
     private func beginLiveEdit(_ target: LiveEditTarget) {
         liveEditMeasuredFrame = nil
+        liveEditMeasuredCardFrame = nil
         liveEdit = target
         showInspector = false
     }
     private func commitLiveEdit() {
         liveEdit = nil
         liveEditMeasuredFrame = nil
+        liveEditMeasuredCardFrame = nil
         showInspector = true
     }
     /// The exact same bindings the inspector itself used to bind its now-removed TextField/TextEditor to -
@@ -1089,24 +1142,33 @@ struct ContentView: View {
             return toViewport(CGRect(x: text.position.x - approximateSize.width/2, y: text.position.y - approximateSize.height/2, width: approximateSize.width, height: approximateSize.height))
         }
     }
-    /// The card's approximate footprint (see liveEditCard) - only needed to keep it fully inside the
-    /// viewport; does not need to track the card's real layout exactly, just closely enough that nothing
-    /// gets clipped or pushed out of reach.
+    /// The card's preferred footprint - derived from LiveEditCardMetrics so it always matches exactly what
+    /// liveEditCard renders at this size (fieldWidth = size.width - outerPadding, etc.); previously a
+    /// separately hand-picked constant that could drift from the view's own real minimums (Codex major, 5D
+    /// round 3).
     private func liveEditCardSize(_ target: LiveEditTarget) -> CGSize {
-        liveEditIsMultiline(target) ? CGSize(width: 284, height: 220) : CGSize(width: 244, height: 110)
+        let multiline = liveEditIsMultiline(target)
+        let preferredFieldSize = multiline ? CGSize(width: 260, height: 140) : CGSize(width: 220, height: LiveEditCardMetrics.singleLineFieldHeight)
+        return CGSize(
+            width: preferredFieldSize.width + LiveEditCardMetrics.outerPadding,
+            height: preferredFieldSize.height + LiveEditCardMetrics.spacing + LiveEditCardMetrics.doneButtonHeight + LiveEditCardMetrics.outerPadding
+        )
     }
-    /// Tries below, above, right, then left of the target's hole, in that order, picking the first spot
-    /// that both fits fully on screen and does not overlap the hole at the card's preferred size. If none
-    /// of the four do (Codex major, 5D round 2 - the old below-then-above-then-clamp fallback could still
-    /// land the clamped card on top of the hole when the viewport was too short for either), shrinks the
-    /// card into whichever side has the most room left, rather than ever clamping it back over the hole.
+    /// Tries below, above, right, then left of the target's hole, in that order, first at the card's
+    /// preferred size and then (Codex major, 5D round 2) at its true minimum usable size (from
+    /// LiveEditCardMetrics - the SAME floor liveEditCard itself renders down to, so this can never claim a
+    /// smaller footprint fits than the view can actually honor, which is exactly how a "shrink to fit" could
+    /// still overlap the hole before - Codex major, 5D round 3). If not even the minimum fits anywhere
+    /// (Codex major, 5D round 2's own concrete counterexample - a hole tall/wide enough that no side has
+    /// minFieldWidth/minFieldHeight of clearance), falls back to whichever side has the most room and clamps
+    /// the card to EXACTLY that much space - smaller than is comfortably usable, but by construction still
+    /// not overlapping the hole, which is the one property this must never give up.
     ///
     /// Below/above only clamp the card's X (cross-axis) position, and right/left only clamp Y - clamping
     /// the AXIS THE HOLE WAS AVOIDED ALONG is exactly what could reintroduce overlap before, since it can
     /// push the card straight back toward (or past) the hole along that axis.
-    private func liveEditCardPlacement(near hole: CGRect, preferredSize: CGSize, viewportSize: CGSize) -> (position: CGPoint, size: CGSize) {
+    private func liveEditCardPlacement(near hole: CGRect, preferredSize: CGSize, multiline: Bool, viewportSize: CGSize) -> (position: CGPoint, size: CGSize) {
         let margin: CGFloat = 12
-        let minSpan: CGFloat = 60
 
         func crossClamped(_ value: CGFloat, half: CGFloat, in total: CGFloat) -> CGFloat {
             min(max(value, half + margin), max(half + margin, total - half - margin))
@@ -1123,12 +1185,19 @@ struct ContentView: View {
             guard x - halfW >= 0, x + halfW <= viewportSize.width else { return nil }
             return CGPoint(x: x, y: crossClamped(hole.midY, half: size.height / 2, in: viewportSize.height))
         }
+        func tryAllSides(_ size: CGSize) -> CGPoint? {
+            vertical(size: size, below: true) ?? vertical(size: size, below: false)
+                ?? horizontal(size: size, right: true) ?? horizontal(size: size, right: false)
+        }
 
-        if let p = vertical(size: preferredSize, below: true) { return (p, preferredSize) }
-        if let p = vertical(size: preferredSize, below: false) { return (p, preferredSize) }
-        if let p = horizontal(size: preferredSize, right: true) { return (p, preferredSize) }
-        if let p = horizontal(size: preferredSize, right: false) { return (p, preferredSize) }
+        if let p = tryAllSides(preferredSize) { return (p, preferredSize) }
 
+        let minimumSize = LiveEditCardMetrics.minimumCardSize(multiline: multiline)
+        if let p = tryAllSides(minimumSize) { return (p, minimumSize) }
+
+        // Not even the minimum fits on any side: shrink into whichever has the most room, clamped to EXACTLY
+        // that much (never a hand-picked floor bigger than the room available) - the card at this point is
+        // smaller than is comfortably usable, but is, by construction, still not overlapping the hole.
         let belowAvail = viewportSize.height - hole.maxY - 2 * margin
         let aboveAvail = hole.minY - 2 * margin
         let rightAvail = viewportSize.width - hole.maxX - 2 * margin
@@ -1137,16 +1206,16 @@ struct ContentView: View {
         let side = bySide.max { $0.value < $1.value }!.key
         switch side {
         case "below":
-            let size = CGSize(width: preferredSize.width, height: max(minSpan, belowAvail))
+            let size = CGSize(width: preferredSize.width, height: max(0, belowAvail))
             return (vertical(size: size, below: true) ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height - size.height / 2 - margin), size)
         case "above":
-            let size = CGSize(width: preferredSize.width, height: max(minSpan, aboveAvail))
+            let size = CGSize(width: preferredSize.width, height: max(0, aboveAvail))
             return (vertical(size: size, below: false) ?? CGPoint(x: viewportSize.width / 2, y: size.height / 2 + margin), size)
         case "right":
-            let size = CGSize(width: max(minSpan, rightAvail), height: preferredSize.height)
+            let size = CGSize(width: max(0, rightAvail), height: preferredSize.height)
             return (horizontal(size: size, right: true) ?? CGPoint(x: viewportSize.width - size.width / 2 - margin, y: viewportSize.height / 2), size)
         default:
-            let size = CGSize(width: max(minSpan, leftAvail), height: preferredSize.height)
+            let size = CGSize(width: max(0, leftAvail), height: preferredSize.height)
             return (horizontal(size: size, right: false) ?? CGPoint(x: size.width / 2 + margin, y: viewportSize.height / 2), size)
         }
     }

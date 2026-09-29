@@ -1149,19 +1149,39 @@ final class CircuitCanvasUITests: XCTestCase {
         note.tap()
         app.buttons["確認"].tap()
         app.buttons["note-body-editor"].tap()
-        XCTAssertTrue(app.textViews["live-edit-field"].waitForExistence(timeout:2))
+        let field = app.textViews["live-edit-field"]
+        XCTAssertTrue(field.waitForExistence(timeout:2))
+        // The keyboard must actually be up: this must hold under the real on-screen conditions editing
+        // happens in, not just in the instant before the field has focus (Codex major, 5D round 3 - the
+        // previous version of this test checked before ever tapping the field).
+        field.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout:2),"the keyboard must appear for this check to be meaningful")
+        // The card's rect is now its own real measured layout (LiveEditCardFrameKey), not the pre-layout
+        // value this file computed for it - see that key's own doc comment (Codex major, 5D round 3).
         let hole = parseRect(element(app,"live-edit-hole").value as? String ?? "")
         let card = parseRect(element(app,"live-edit-card-rect").value as? String ?? "")
         XCTAssertFalse(hole.intersects(card), "the input card must never overlap the item being edited, even when it has grown tall")
         app.buttons["live-edit-done"].tap()
     }
 
-    /// Parses the "x,y,w,h" accessibility values this feature exposes for its hole/card rects back into a
-    /// CGRect, so a test can compare or intersect them directly instead of eyeballing the raw string.
-    private func parseRect(_ value: String) -> CGRect {
-        let parts = value.split(separator:",").compactMap { Double($0) }
-        guard parts.count == 4 else { return .zero }
-        return CGRect(x:parts[0], y:parts[1], width:parts[2], height:parts[3])
+    /// Parses the "x=..;y=..;w=..;h=.." accessibility values this feature exposes for its hole/card rects
+    /// back into a CGRect. Not a plain "x,y,w,h" comma join: a value that reads as a pure number can come
+    /// back from XCUITest with locale grouping separators inserted into it (e.g. "2400" as "2,400"), which
+    /// silently broke a naive comma-split for any on-screen value at or past 1000 (Codex major, 5D round 3
+    /// surfaced this - the card's real measured size routinely lands in that range).
+    /// Fails the test outright on a malformed value, rather than silently substituting .zero - a rect that
+    /// trivially satisfies any non-intersection check and so could hide a real regression.
+    private func parseRect(_ value: String, file: StaticString = #filePath, line: UInt = #line) -> CGRect {
+        var fields: [String: Double] = [:]
+        for pair in value.split(separator:";") {
+            let kv = pair.split(separator:"=", maxSplits:1)
+            if kv.count == 2 { fields[String(kv[0])] = Double(kv[1]) }
+        }
+        guard let x = fields["x"], let y = fields["y"], let w = fields["w"], let h = fields["h"] else {
+            XCTFail("could not parse a rect out of \"\(value)\"", file:file, line:line)
+            return .zero
+        }
+        return CGRect(x:x, y:y, width:w, height:h)
     }
 
     @MainActor
