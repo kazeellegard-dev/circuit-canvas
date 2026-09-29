@@ -1741,9 +1741,11 @@ struct ContentView: View {
     // Deliberately not inside `move(...)` itself: per 2026-09-29 feedback the item should move freely under
     // the finger while dragging and only snap once it is released, not jump between grid points mid-drag.
     // Called from each drag's onEnded, after the last `move(...)`, and folded into the same undo step that
-    // drag's first `move(...)` call already pushed (no pushUndo() here).
+    // drag's first `move(...)` call already pushed (no pushUndo() here). Only an item that drag really moved
+    // (it has a drag origin) snaps: a drag refused in edit mode or during live editing still reaches onEnded,
+    // and must not move anything, off the Undo history (Codex major, 5F round 3).
     private func snapToGrid(symbolID: UUID) {
-        guard gridSnapEnabled, let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
+        guard gridSnapEnabled, dragOrigins[symbolID] != nil, let index = symbols.firstIndex(where: { $0.id == symbolID }) else { return }
         let oldPins = pins(for: symbols[index])
         symbols[index].position = GridSnap.point(symbols[index].position)
         let newPins = pins(for: symbols[index])
@@ -1754,11 +1756,11 @@ struct ContentView: View {
         reroute()
     }
     private func snapToGrid(noteID: UUID) {
-        guard gridSnapEnabled, let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        guard gridSnapEnabled, noteDragOrigins[noteID] != nil, let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
         notes[index].position = GridSnap.point(notes[index].position)
     }
     private func snapToGrid(textID: UUID) {
-        guard gridSnapEnabled, let index = texts.firstIndex(where: { $0.id == textID }) else { return }
+        guard gridSnapEnabled, textDragOrigins[textID] != nil, let index = texts.firstIndex(where: { $0.id == textID }) else { return }
         texts[index].position = GridSnap.point(texts[index].position)
     }
     private func snappedIfEnabled(_ point: CGPoint) -> CGPoint { gridSnapEnabled ? GridSnap.point(point) : point }

@@ -2961,4 +2961,23 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(pin("CAN",0), canPinBefore, "and the symbol, in the same single step")
         XCTAssertEqual(routePoints(app,1), wireBefore, "and the wire's route")
     }
+
+    /// A drag refused in edit mode must not snap on release either - it would move an off-grid item (and its
+    /// wires) without an Undo step (Codex major, 5F round 3).
+    @MainActor
+    func testARefusedDragInEditModeDoesNotSnapOnRelease() throws {
+        let app = makeApp(gridSnap: true); app.launch()
+        let symbol = element(app,"symbol-24 V → 5 V")
+        XCTAssertTrue(symbol.waitForExistence(timeout:3))
+        let pinBefore = coordinates(app.buttons["symbol-24 V → 5 V-pin-0"]), wireBefore = routePoints(app,0)
+        XCTAssertFalse(onFifteenPointGrid(pinBefore[0]) && onFifteenPointGrid(pinBefore[1]), "the seed symbol must start off the grid: \(pinBefore)")
+        XCTAssertFalse(app.buttons["undo-button"].isEnabled)
+        app.buttons["edit-mode-toggle"].tap()
+        let start = symbol.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        start.press(forDuration:0.2,thenDragTo:start.withOffset(CGVector(dx:37,dy:23)))
+        app.buttons["edit-mode-toggle"].tap()
+        XCTAssertEqual(coordinates(app.buttons["symbol-24 V → 5 V-pin-0"]), pinBefore, "a refused drag must leave the symbol where it was")
+        XCTAssertEqual(routePoints(app,0), wireBefore, "and its wire")
+        XCTAssertFalse(app.buttons["undo-button"].isEnabled, "and add nothing to the Undo history")
+    }
 }
