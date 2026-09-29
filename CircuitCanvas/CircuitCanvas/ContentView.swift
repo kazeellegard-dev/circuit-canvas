@@ -308,25 +308,34 @@ struct ContentView: View {
                     }
                     .disabled(redoStack.isEmpty || liveEdit != nil)
                     .accessibilityIdentifier("redo-button")
+                    // Every tool button below is tinted while it is the active tool (feedback, 2026-09-29) -
+                    // otherwise only キャンバス移動/グループ化/編集 changed color when active, leaving no way
+                    // to tell at a glance whether 選択/配線/＋シンボル/＋メモ was the current mode.
                     Button("選択", systemImage: "cursorarrow") { tool = .select; linkingNote = nil; pendingRelateFrom = nil }
-                        .disabled(toolbarDisabled)
-                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil }
-                        .disabled(toolbarDisabled)
-                    // Jumps the library to whichever category the selected symbol is in, so it is visible
-                    // (and its highlight legible) instead of leaving whatever tab happened to be open before.
-                    Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol; selectedCategory = selectedLibrary.category }
-                        .disabled(toolbarDisabled)
-                    Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
+                        .tint(tool == .select ? .accentColor : nil)
                         .disabled(toolbarDisabled)
                     // A dedicated pan tool (2026-09-29 feedback): one-finger drag on empty canvas otherwise
                     // does nothing (see canvasPanGesture) - too easy to nudge the canvas by accident while
                     // trying to grab a wire lead. Two fingers can always pan regardless of tool (below).
+                    // Placed right after 選択 (feedback, 2026-09-29 - more natural next to the cursor tool
+                    // than after the placement tools it used to sit behind).
                     Button(tool == .pan ? "キャンバス移動中" : "キャンバス移動", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
                         tool = .pan; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil; pendingWireStart = nil
                     }
                     .tint(tool == .pan ? .accentColor : nil)
                     .disabled(toolbarDisabled)
                     .accessibilityIdentifier("pan-mode-toggle")
+                    Button("配線", systemImage: "point.3.connected.trianglepath.dotted") { tool = .wire; pendingWireStart = nil; selectedSymbol = nil; selectedNote = nil; selectedText = nil; selectedGroup = nil; linkingNote = nil; pendingRelateFrom = nil }
+                        .tint(tool == .wire ? .accentColor : nil)
+                        .disabled(toolbarDisabled)
+                    // Jumps the library to whichever category the selected symbol is in, so it is visible
+                    // (and its highlight legible) instead of leaving whatever tab happened to be open before.
+                    Button("＋シンボル", systemImage: "plus.square.on.square") { tool = .symbol; selectedCategory = selectedLibrary.category }
+                        .tint(tool == .symbol ? .accentColor : nil)
+                        .disabled(toolbarDisabled)
+                    Button("＋メモ", systemImage: "note.text.badge.plus") { tool = .note }
+                        .tint(tool == .note ? .accentColor : nil)
+                        .disabled(toolbarDisabled)
                     // Group-selection mode (5E): drag a marquee over the items to group; see
                     // groupSelectionGesture (inside canvasPanGesture) and the "グループ化しますか？" alert.
                     Button(tool == .group ? "グループ化選択中" : "グループ化", systemImage: "square.dashed") {
