@@ -3328,5 +3328,34 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(afterOut.x, before.x, accuracy: 20, "zooming out must stay centered on the fingers too")
         XCTAssertEqual(afterOut.y, before.y, accuracy: 20, "zooming out must stay centered on the fingers too")
     }
+
+    /// A pinch over the gray margin outside the canvas zooms around a point that is not on the canvas, which
+    /// can push the canvas itself off screen while the fingers are down. Once they lift, the canvas is brought
+    /// back to where the usual pan margin keeps at least 200pt of it visible (Codex, pinch round 3).
+    @MainActor
+    func testPinchingOverTheMarginLeavesTheCanvasOnScreen() {
+        let app = makeApp(); app.launch()
+        let canvas = element(app, "circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout: 3))
+        func scale() -> Double { Double(element(app, "zoom-scale-exact").value as? String ?? "") ?? .nan }
+        func offsetX() -> Double {
+            Double((element(app, "canvas-offset-exact").value as? String ?? "").split(separator: ",").first ?? "") ?? .nan
+        }
+        // Pan as far left as the pan margin allows: the canvas's right edge ends up 200pt from the left, so the
+        // viewport's center (where XCUITest pinches) is over the gray margin.
+        app.buttons["pan-mode-toggle"].tap()
+        for _ in 0..<5 {
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)))
+        }
+        XCTAssertEqual(offsetX(), 200 - 2400, accuracy: 1, "the pan should have stopped at the margin")
+
+        canvas.pinch(withScale: 2, velocity: 1)
+        let s = scale()
+        XCTAssertGreaterThan(s, 1.15, "the pinch did not zoom in")
+        // Zooming in around a point beyond the canvas's right edge pushes that edge left of the margin while
+        // pinching; after release it must be back at (at least) the margin.
+        XCTAssertGreaterThanOrEqual(offsetX(), 200 - 2400 * s - 1, "the canvas was left (partly) off screen after the pinch")
+    }
 }
 
