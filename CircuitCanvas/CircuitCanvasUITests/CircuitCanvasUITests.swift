@@ -3291,4 +3291,44 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertFalse(app.buttons["export-save-to-files"].isEnabled)
         XCTAssertFalse(app.buttons["export-share"].exists)
     }
+
+    // MARK: - Pinch-to-zoom sensitivity (feedback, 2026-10-03)
+
+    /// A pinch zooms gently (damped, never straight to a limit) and around the point between the fingers.
+    /// XCUITest's pinch is centered on the element, here the whole viewport, so the canvas point at the
+    /// viewport's center must stay there.
+    @MainActor
+    func testPinchZoomsGentlyAroundTheFingers() {
+        let app = makeApp(); app.launch()
+        let canvas = element(app, "circuit-canvas")
+        XCTAssertTrue(canvas.waitForExistence(timeout: 3))
+        func scale() -> Double { Double(element(app, "zoom-scale-exact").value as? String ?? "") ?? .nan }
+        func offset() -> (x: Double, y: Double) {
+            let parts = (element(app, "canvas-offset-exact").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            return parts.count == 2 ? (parts[0], parts[1]) : (.nan, .nan)
+        }
+        let size = (element(app, "viewport-size").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(size.count, 2)
+        let center = (x: size[0] / 2, y: size[1] / 2)
+        func canvasPointAtCenter() -> (x: Double, y: Double) {
+            let s = scale(), o = offset()
+            return ((center.x - o.x) / s, (center.y - o.y) / s)
+        }
+        XCTAssertEqual(scale(), 1, accuracy: 0.0001)
+        let before = canvasPointAtCenter()
+
+        canvas.pinch(withScale: 2, velocity: 1)
+        let zoomedIn = scale()
+        XCTAssertGreaterThan(zoomedIn, 1.15, "the pinch did not zoom in")
+        XCTAssertLessThan(zoomedIn, 1.9, "spreading the fingers to twice their distance must zoom well under 2x")
+        let afterIn = canvasPointAtCenter()
+        XCTAssertEqual(afterIn.x, before.x, accuracy: 20, "the zoom must stay centered on the fingers")
+        XCTAssertEqual(afterIn.y, before.y, accuracy: 20, "the zoom must stay centered on the fingers")
+
+        canvas.pinch(withScale: 0.5, velocity: -1)
+        let zoomedOut = scale()
+        XCTAssertLessThan(zoomedOut, zoomedIn - 0.15, "the pinch did not zoom out")
+        XCTAssertGreaterThan(zoomedOut, 0.5, "pinching to half the distance must not drop straight to the minimum")
+    }
 }
+

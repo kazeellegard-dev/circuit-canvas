@@ -50,6 +50,28 @@ enum GridSnap {
 /// screen position across a scale change - used by the zoom menu (4E), which changes `canvasScale` directly
 /// rather than through a pinch, and must not otherwise disturb what is currently on screen.
 enum CanvasZoom {
+    /// The pinch range - the zoom menu's presets (25%-200%) all lie inside it.
+    static let minimumScale: CGFloat = 0.25
+    static let maximumScale: CGFloat = 2.5
+    /// How strongly a pinch zooms: the fingers' distance ratio is raised to this power. 1 would follow the
+    /// fingers exactly, which on a real iPad hit the limits within a single pinch (feedback, 2026-10-03);
+    /// at 0.6, spreading the fingers to twice their distance zooms about 1.5x.
+    static let pinchSensitivity: CGFloat = 0.6
+
+    /// The scale for a pinch that started at `startScale` and whose fingers are now `gestureScale` times as
+    /// far apart as when it began.
+    static func pinchScale(startScale: CGFloat, gestureScale: CGFloat) -> CGFloat {
+        guard gestureScale > 0 else { return startScale }
+        return min(max(startScale * pow(gestureScale, pinchSensitivity), minimumScale), maximumScale)
+    }
+
+    /// Keeps the canvas point that was between the fingers when the pinch began under the point between
+    /// them now - so the zoom centers on the fingers, and moving both fingers also pans.
+    static func pinchOffset(startScale: CGFloat, startOffset: CGSize, startCentroid: CGPoint, newScale: CGFloat, centroid: CGPoint) -> CGSize {
+        let anchor = CGPoint(x: (startCentroid.x - startOffset.width) / startScale, y: (startCentroid.y - startOffset.height) / startScale)
+        return CGSize(width: centroid.x - anchor.x * newScale, height: centroid.y - anchor.y * newScale)
+    }
+
     static func offset(oldOffset: CGSize, oldScale: CGFloat, newScale: CGFloat, viewportSize: CGSize) -> CGSize {
         let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
         let canvasCenter = CGPoint(x: (center.x - oldOffset.width) / oldScale, y: (center.y - oldOffset.height) / oldScale)

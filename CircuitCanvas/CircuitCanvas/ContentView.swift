@@ -126,8 +126,14 @@ struct ContentView: View {
     /// is still tracking a touch would double-apply translation and make the canvas jump (Codex major, 5B
     /// round 3). Every single-finger edit drag (move/resize/segment) also refuses to start or continue while
     /// this is non-nil, for the same reason in the other direction.
-    private enum PanSource { case singleFinger, twoFinger }
+    /// `.pinch` (feedback, 2026-10-03) also moves the canvas: it zooms around the point between the fingers,
+    /// and takes over from a two-finger pan already under way, since one gesture must own the offset.
+    private enum PanSource { case singleFinger, twoFinger, pinch }
     @State private var activePanSource: PanSource?
+    /// Where the current pinch started: everything it computes is relative to this, not to the previous
+    /// update, so rounding and clamping never accumulate.
+    private struct PinchStart { let scale: CGFloat; let offset: CGSize; let centroid: CGPoint }
+    @State private var pinchStart: PinchStart?
     @State private var isPanningCanvas = false
     @State private var canvasOffset = CGSize.zero
     @State private var canvasPanOrigin = CGSize.zero
@@ -594,7 +600,25 @@ struct ContentView: View {
                         activePanSource = nil
                     },
                     isEditDragActive: { isEditDragActive || activePanSource == .singleFinger || liveEdit != nil },
-                    onAttached: { twoFingerPanAttached = true }
+                    onAttached: { twoFingerPanAttached = true },
+                    onPinchBegan: { centroid in
+                        guard activePanSource == nil || activePanSource == .twoFinger else { return }
+                        activePanSource = .pinch
+                        pinchStart = PinchStart(scale: canvasScale, offset: canvasOffset, centroid: centroid)
+                    },
+                    onPinchChanged: { gestureScale, centroid in
+                        guard activePanSource == .pinch, let start = pinchStart else { return }
+                        let scale = CanvasZoom.pinchScale(startScale: start.scale, gestureScale: gestureScale)
+                        let offset = CanvasZoom.pinchOffset(startScale: start.scale, startOffset: start.offset, startCentroid: start.centroid,
+                                                            newScale: scale, centroid: centroid)
+                        canvasScale = scale; canvasScaleOrigin = scale
+                        canvasOffset = boundedCanvasOffset(offset, in: proxy.size, scale: scale)
+                    },
+                    onPinchEnded: {
+                        guard activePanSource == .pinch else { return }
+                        canvasPanOrigin = canvasOffset
+                        activePanSource = nil; pinchStart = nil
+                    }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .allowsHitTesting(false)
@@ -653,7 +677,6 @@ struct ContentView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .coordinateSpace(name: "editorViewport")
-            .simultaneousGesture(canvasZoomGesture)
             .clipped()
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2035,11 +2058,6 @@ struct ContentView: View {
                 groupSelectionCandidates = []
             }
     }
-    private var canvasZoomGesture: some Gesture {
-        MagnificationGesture()
-            .onChanged { value in guard liveEdit == nil else { return }; canvasScale = min(max(canvasScaleOrigin * value, 0.5), 2.5) }
-            .onEnded { _ in canvasScaleOrigin = canvasScale }
-    }
     private func canvasPoint(from point: CGPoint) -> CGPoint { .init(x: (point.x - canvasOffset.width) / canvasScale, y: (point.y - canvasOffset.height) / canvasScale) }
     /// The inverse of the scale/offset transform every card's own `.position(...)` already applies - converts
     /// a rect measured in viewport space (see TextFramesKey) back into the canvas-space coordinates
@@ -2047,10 +2065,10 @@ struct ContentView: View {
     private func canvasRect(from viewportRect: CGRect) -> CGRect {
         CGRect(origin: canvasPoint(from: viewportRect.origin), size: CGSize(width: viewportRect.width/canvasScale, height: viewportRect.height/canvasScale))
     }
-    private func boundedCanvasOffset(_ proposed: CGSize, in viewportSize: CGSize) -> CGSize {
+    private func boundedCanvasOffset(_ proposed: CGSize, in viewportSize: CGSize, scale: CGFloat? = nil) -> CGSize {
         let minimumVisible: CGFloat = 200
-        let scaledWidth = canvasSize.width * canvasScale
-        let scaledHeight = canvasSize.height * canvasScale
+        let scaledWidth = canvasSize.width * (scale ?? canvasScale)
+        let scaledHeight = canvasSize.height * (scale ?? canvasScale)
         return CGSize(
             width: min(max(proposed.width, minimumVisible - scaledWidth), viewportSize.width - minimumVisible),
             height: min(max(proposed.height, minimumVisible - scaledHeight), viewportSize.height - minimumVisible)
@@ -2709,6 +2727,13 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
     /// part of the wiring a UI test can still confirm: that attachment itself succeeded, not left silently
     /// failing (Codex major, 5B round 1, was exactly a silent wiring failure of this kind).
     var onAttached: (() -> Void)? = nil
+    /// Pinch-to-zoom (feedback, 2026-10-03), on the same window-wide footing as the pan above: a UIKit pinch,
+    /// unlike SwiftUI's MagnificationGesture, reports where the fingers are (to zoom around them) and also
+    /// responds to XCUITest's synthesized pinch, so it can be checked on the simulator. Points are in this
+    /// overlay's space, which is the editor viewport's.
+    var onPinchBegan: (CGPoint) -> Void = { _ in }
+    var onPinchChanged: (CGFloat, CGPoint) -> Void = { _, _ in }
+    var onPinchEnded: () -> Void = {}
 
     func makeUIView(context: Context) -> UIView {
         let view = WindowAttachingView()
@@ -2727,6 +2752,9 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.isEditDragActive = isEditDragActive
+        context.coordinator.onPinchBegan = onPinchBegan
+        context.coordinator.onPinchChanged = onPinchChanged
+        context.coordinator.onPinchEnded = onPinchEnded
         if let scopeView = uiView.window != nil ? uiView : nil {
             context.coordinator.attachIfNeeded(scopeView: scopeView)
         }
@@ -2739,6 +2767,9 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
         var onEnded: () -> Void
         var isEditDragActive: () -> Bool
         let onAttached: (() -> Void)?
+        var onPinchBegan: (CGPoint) -> Void = { _ in }
+        var onPinchChanged: (CGFloat, CGPoint) -> Void = { _, _ in }
+        var onPinchEnded: () -> Void = {}
         private weak var scopeView: UIView?
         private var didAttach = false
         init(onBegan: @escaping () -> Void, onChanged: @escaping (CGSize) -> Void, onEnded: @escaping () -> Void, isEditDragActive: @escaping () -> Bool, onAttached: (() -> Void)?) {
@@ -2754,6 +2785,10 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
             recognizer.delegate = self
             recognizer.cancelsTouchesInView = false
             window.addGestureRecognizer(recognizer)
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+            pinch.delegate = self
+            pinch.cancelsTouchesInView = false
+            window.addGestureRecognizer(pinch)
             onAttached?()
         }
         @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
@@ -2766,6 +2801,20 @@ private struct TwoFingerPanOverlay: UIViewRepresentable {
                 onChanged(CGSize(width: t.x, height: t.y))
             case .ended, .cancelled, .failed:
                 onEnded()
+            default: break
+            }
+        }
+        @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            guard let scopeView else { return }
+            let centroid = recognizer.location(in: scopeView)
+            switch recognizer.state {
+            case .began: onPinchBegan(centroid)
+            case .changed:
+                // With one finger already lifted the centroid is just the remaining finger: hold the zoom
+                // there rather than letting it jump.
+                guard recognizer.numberOfTouches >= 2 else { return }
+                onPinchChanged(recognizer.scale, centroid)
+            case .ended, .cancelled, .failed: onPinchEnded()
             default: break
             }
         }
