@@ -272,11 +272,15 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(element(app, "zoom-slider-percent").label, "\(Int((s * 100).rounded()))%", "the panel shows the scale")
         XCTAssertTrue((canvas.value as? String ?? "").contains("scale=\(Int((s * 100).rounded()))"), "the canvas took the new scale")
 
-        // Its two ends are the limits, unchanged: 25% and 250%.
+        // Its two ends are the limits, unchanged: 25% and 250%. XCUITest stops a little short of an end (0 was
+        // seen to land on 27%), so this checks it gets close and never goes past - the exact end values are
+        // CanvasZoomTests' job.
         app.sliders["zoom-slider"].adjust(toNormalizedSliderPosition: 0)
-        XCTAssertEqual(exactZoom(app), 0.25, accuracy: 0.0001)
+        XCTAssertGreaterThanOrEqual(exactZoom(app), 0.25)
+        XCTAssertLessThan(exactZoom(app), 0.32)
         app.sliders["zoom-slider"].adjust(toNormalizedSliderPosition: 1)
-        XCTAssertEqual(exactZoom(app), 2.5, accuracy: 0.0001)
+        XCTAssertLessThanOrEqual(exactZoom(app), 2.5)
+        XCTAssertGreaterThan(exactZoom(app), 2.2)
 
         // 100% に戻す lands exactly on 100%.
         app.buttons["zoom-reset-100"].tap()
