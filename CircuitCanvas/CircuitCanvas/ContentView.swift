@@ -612,13 +612,15 @@ struct ContentView: View {
                         let offset = CanvasZoom.pinchOffset(startScale: start.scale, startOffset: start.offset, startCentroid: start.centroid,
                                                             newScale: scale, centroid: centroid)
                         canvasScale = scale; canvasScaleOrigin = scale
-                        // Not run through boundedCanvasOffset (like setZoom): its margin would pull the canvas
-                        // out from under the fingers near an edge (Codex major, pinch round 1). The point under
-                        // the fingers is always a canvas point, so the canvas can never leave the screen.
+                        // Not run through boundedCanvasOffset while pinching: its margin would pull the canvas
+                        // out from under the fingers near an edge (Codex major, pinch round 1). It is applied
+                        // once the fingers lift instead (onPinchEnded) - a pinch over the gray margin outside
+                        // the canvas could otherwise zoom the canvas itself off screen.
                         canvasOffset = offset
                     },
                     onPinchEnded: {
                         guard activePanSource == .pinch else { return }
+                        canvasOffset = boundedCanvasOffset(canvasOffset, in: proxy.size)
                         canvasPanOrigin = canvasOffset
                         activePanSource = nil; pinchStart = nil
                     }
