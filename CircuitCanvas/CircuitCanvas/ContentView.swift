@@ -612,7 +612,10 @@ struct ContentView: View {
                         let offset = CanvasZoom.pinchOffset(startScale: start.scale, startOffset: start.offset, startCentroid: start.centroid,
                                                             newScale: scale, centroid: centroid)
                         canvasScale = scale; canvasScaleOrigin = scale
-                        canvasOffset = boundedCanvasOffset(offset, in: proxy.size, scale: scale)
+                        // Not run through boundedCanvasOffset (like setZoom): its margin would pull the canvas
+                        // out from under the fingers near an edge (Codex major, pinch round 1). The point under
+                        // the fingers is always a canvas point, so the canvas can never leave the screen.
+                        canvasOffset = offset
                     },
                     onPinchEnded: {
                         guard activePanSource == .pinch else { return }
@@ -2065,10 +2068,10 @@ struct ContentView: View {
     private func canvasRect(from viewportRect: CGRect) -> CGRect {
         CGRect(origin: canvasPoint(from: viewportRect.origin), size: CGSize(width: viewportRect.width/canvasScale, height: viewportRect.height/canvasScale))
     }
-    private func boundedCanvasOffset(_ proposed: CGSize, in viewportSize: CGSize, scale: CGFloat? = nil) -> CGSize {
+    private func boundedCanvasOffset(_ proposed: CGSize, in viewportSize: CGSize) -> CGSize {
         let minimumVisible: CGFloat = 200
-        let scaledWidth = canvasSize.width * (scale ?? canvasScale)
-        let scaledHeight = canvasSize.height * (scale ?? canvasScale)
+        let scaledWidth = canvasSize.width * canvasScale
+        let scaledHeight = canvasSize.height * canvasScale
         return CGSize(
             width: min(max(proposed.width, minimumVisible - scaledWidth), viewportSize.width - minimumVisible),
             height: min(max(proposed.height, minimumVisible - scaledHeight), viewportSize.height - minimumVisible)

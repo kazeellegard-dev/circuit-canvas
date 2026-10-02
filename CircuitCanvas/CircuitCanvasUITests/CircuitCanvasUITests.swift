@@ -324,16 +324,11 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
         canvas.pinch(withScale:0.73,velocity:-1)
-        // XCUITest's synthetic pinch is unreliable in this harness (see the note on
-        // testOperationHintStaysFixedDuringZoomAndPan): confirmed again here, precisely, via the exact scale -
-        // it has been observed to leave canvasScale completely untouched rather than raising a
-        // MagnificationGesture at all. There is no other in-app way to reach a non-preset scale to test from
-        // (the menu itself only ever sets exact presets), so when that happens, skip rather than fail on an
-        // environment limitation the production code has no part in.
+        // The pinch is a UIKit recognizer since the 2026-10-03 sensitivity fix, which XCUITest's synthesized
+        // pinch does drive (SwiftUI's MagnificationGesture, before it, often did not - this used to skip).
+        // So landing on a non-preset scale is now required, not skipped.
         let presets: [Double] = [0.25,0.5,1,1.5,2]
-        guard presets.allSatisfy({ abs(exactScale() - $0) > 0.001 }) else {
-            throw XCTSkip("XCUITest's pinch did not land on a non-preset scale in this environment (known harness limitation) - nothing to test the menu selection against.")
-        }
+        XCTAssertTrue(presets.allSatisfy({ abs(exactScale() - $0) > 0.001 }), "the pinch must leave a non-preset scale, got \(exactScale())")
         app.buttons["zoom-menu"].tap()
         app.buttons["zoom-100"].tap()
         XCTAssertEqual(exactScale(),1,accuracy:0.0001)
@@ -3329,6 +3324,9 @@ final class CircuitCanvasUITests: XCTestCase {
         let zoomedOut = scale()
         XCTAssertLessThan(zoomedOut, zoomedIn - 0.15, "the pinch did not zoom out")
         XCTAssertGreaterThan(zoomedOut, 0.5, "pinching to half the distance must not drop straight to the minimum")
+        let afterOut = canvasPointAtCenter()
+        XCTAssertEqual(afterOut.x, before.x, accuracy: 20, "zooming out must stay centered on the fingers too")
+        XCTAssertEqual(afterOut.y, before.y, accuracy: 20, "zooming out must stay centered on the fingers too")
     }
 }
 

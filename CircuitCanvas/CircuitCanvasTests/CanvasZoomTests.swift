@@ -36,4 +36,14 @@ import Testing
             #expect(abs(anchor.y * scale + offset.height - centroid.y) < 0.0001)
         }
     }
+
+    /// Codex round 1: panned to the right edge (offset.x = -2200 on the 2400-wide canvas) and pinched to half
+    /// the distance with the fingers at x = 100. The offset applied during a pinch is pinchOffset itself (no
+    /// pan-margin clamp), so canvas x = 2300 stays exactly under the fingers.
+    @Test func aPinchNearTheEdgeKeepsThePointUnderTheFingers() {
+        let scale = CanvasZoom.pinchScale(startScale: 1, gestureScale: 0.5)
+        let offset = CanvasZoom.pinchOffset(startScale: 1, startOffset: CGSize(width: -2200, height: 0), startCentroid: CGPoint(x: 100, y: 300),
+                                            newScale: scale, centroid: CGPoint(x: 100, y: 300))
+        #expect(abs(2300 * scale + offset.width - 100) < 0.0001)
+    }
 }
