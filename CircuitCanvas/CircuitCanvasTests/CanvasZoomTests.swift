@@ -46,4 +46,29 @@ import Testing
                                             newScale: scale, centroid: CGPoint(x: 100, y: 300))
         #expect(abs(2300 * scale + offset.width - 100) < 0.0001)
     }
+
+    /// The zoom slider (feedback, 2026-10-03): its ends are the limits, and it is logarithmic - 100% sits about
+    /// 60% along, and equal slides zoom by equal factors.
+    @Test func theSliderSpansTheRangeLogarithmically() {
+        #expect(CanvasZoom.sliderScale(position: 0) == CanvasZoom.minimumScale)
+        #expect(CanvasZoom.sliderScale(position: 1) == CanvasZoom.maximumScale)
+        #expect(CanvasZoom.sliderScale(position: -0.5) == CanvasZoom.minimumScale)
+        #expect(CanvasZoom.sliderScale(position: 1.5) == CanvasZoom.maximumScale)
+        let hundred = CanvasZoom.sliderPosition(scale: 1)
+        #expect(hundred > 0.55 && hundred < 0.65)
+        #expect(CanvasZoom.sliderScale(position: hundred) == 1)
+        // Equal slides, equal factors: a tenth of the slider is the same ratio at both ends.
+        let low = CanvasZoom.sliderScale(position: 0.1) / CanvasZoom.sliderScale(position: 0)
+        let high = CanvasZoom.sliderScale(position: 1) / CanvasZoom.sliderScale(position: 0.9)
+        #expect(abs(low - high) < 0.02)
+    }
+
+    @Test func theSliderLandsOnWholePercentsAndRoundTrips() {
+        for position in stride(from: 0.0, through: 1.0, by: 0.037) {
+            let scale = CanvasZoom.sliderScale(position: position)
+            #expect(abs(scale * 100 - (scale * 100).rounded()) < 0.0001, "\(scale) is not a whole percent")
+            #expect(abs(CanvasZoom.sliderScale(position: CanvasZoom.sliderPosition(scale: scale)) - scale) < 0.0001)
+        }
+    }
 }
+

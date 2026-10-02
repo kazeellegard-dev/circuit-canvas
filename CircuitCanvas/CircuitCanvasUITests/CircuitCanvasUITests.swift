@@ -237,41 +237,52 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertFalse(element(app,"experiment-note-R12を変更-relate-corner-topLeading").exists)
     }
 
+    /// Moves the zoom slider (already open) to where `percent` sits on its logarithmic 25%-250% scale.
+    /// XCUITest positions a slider only approximately, so callers allow a few percent either way.
+    @MainActor private func slide(_ app: XCUIApplication, toPercent percent: Double) {
+        let slider = app.sliders["zoom-slider"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 2), "the zoom slider did not open")
+        slider.adjust(toNormalizedSliderPosition: log(percent / 25) / log(10))
+    }
+
+    @MainActor private func exactZoom(_ app: XCUIApplication) -> Double {
+        Double(element(app, "zoom-scale-exact").value as? String ?? "") ?? .nan
+    }
+
+    /// Feedback (2026-10-03): tapping the scale opens a slider for any scale between the limits, instead of a
+    /// menu of five fixed ones.
     @MainActor
-    func testZoomMenuOffersFixedPercentagesAndAppliesThemExactly() throws {
+    func testZoomSliderAdjustsToAnyScaleBetweenTheLimits() throws {
         let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
-        func scalePercent() -> Int? {
-            guard let value = canvas.value as? String, let after = value.range(of:"scale=") else { return nil }
-            return Int(value[after.upperBound...].prefix { $0.isNumber })
-        }
-        // The Int-rounded percentage above cannot tell an exact 1.0 from a near-miss, so also read the raw
-        // value setZoom(_:) assigns (Codex minor, 4E round 2).
-        func exactScale() -> Double? { Double(element(app,"zoom-scale-exact").value as? String ?? "") }
-        XCTAssertEqual(scalePercent(),100)
+        XCTAssertEqual(exactZoom(app), 1, accuracy: 0.0001)
         app.buttons["zoom-menu"].tap()
-        for percent in [25,50,100,150,200] {
-            XCTAssertTrue(app.buttons["zoom-\(percent)"].waitForExistence(timeout:2),"the menu must offer \(percent)%")
-        }
-        app.buttons["zoom-150"].tap()
-        XCTAssertEqual(scalePercent(),150)
-        XCTAssertEqual(exactScale() ?? -1,1.5,accuracy:0.0001)
-        // Coming from a non-100% state, selecting 100% must land exactly on it (not some pinch-drifted value).
-        app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-100"].tap()
-        XCTAssertEqual(scalePercent(),100)
-        XCTAssertEqual(exactScale() ?? -1,1,accuracy:0.0001)
-        app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-25"].tap()
-        XCTAssertEqual(scalePercent(),25)
-        app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-200"].tap()
-        XCTAssertEqual(scalePercent(),200)
+        XCTAssertEqual(element(app, "zoom-slider-percent").label, "100%")
+        XCTAssertFalse(app.buttons["zoom-reset-100"].isEnabled, "already at 100%")
+
+        // A scale none of the old menu items offered.
+        slide(app, toPercent: 130)
+        let s = exactZoom(app)
+        XCTAssertEqual(s, 1.3, accuracy: 0.04)
+        XCTAssertEqual((s * 100).rounded(), s * 100, accuracy: 0.0001, "the slider lands on whole percents")
+        XCTAssertEqual(element(app, "zoom-slider-percent").label, "\(Int((s * 100).rounded()))%", "the panel shows the scale")
+        XCTAssertTrue((canvas.value as? String ?? "").contains("scale=\(Int((s * 100).rounded()))"), "the canvas took the new scale")
+
+        // Its two ends are the limits, unchanged: 25% and 250%.
+        app.sliders["zoom-slider"].adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(exactZoom(app), 0.25, accuracy: 0.0001)
+        app.sliders["zoom-slider"].adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(exactZoom(app), 2.5, accuracy: 0.0001)
+
+        // 100% に戻す lands exactly on 100%.
+        app.buttons["zoom-reset-100"].tap()
+        XCTAssertEqual(exactZoom(app), 1, accuracy: 0.0001)
+        XCTAssertEqual(element(app, "zoom-slider-percent").label, "100%")
     }
 
     @MainActor
-    func testZoomMenuKeepsTheViewportCenterEvenWhenAlreadyPannedNearTheEdge() throws {
+    func testZoomSliderKeepsTheViewportCenterEvenWhenAlreadyPannedNearTheEdge() throws {
         let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
@@ -304,52 +315,45 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertEqual(afterPan.y,v[1]-200,accuracy:2)
         let before = canvasCenter()
         app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-200"].tap()
-        XCTAssertEqual(offsetAndScale().scale,2,accuracy:0.0001,"the selection itself must have taken effect")
+        slide(app, toPercent: 200)
+        XCTAssertEqual(offsetAndScale().scale,2,accuracy:0.04,"the slide itself must have taken effect")
         XCTAssertEqual(canvasCenter().x,before.x,accuracy:1,"zooming must not move the point that was centered")
         XCTAssertEqual(canvasCenter().y,before.y,accuracy:1)
         // And back down, from a now-panned, zoomed-in state.
         let midway = canvasCenter()
-        app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-50"].tap()
-        XCTAssertEqual(offsetAndScale().scale,0.5,accuracy:0.0001)
+        slide(app, toPercent: 50)
+        XCTAssertEqual(offsetAndScale().scale,0.5,accuracy:0.02)
         XCTAssertEqual(canvasCenter().x,midway.x,accuracy:1)
         XCTAssertEqual(canvasCenter().y,midway.y,accuracy:1)
     }
 
+    /// From a scale a pinch left (not a whole percent), 100% に戻す lands exactly on 100%.
     @MainActor
-    func testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale() throws {
+    func testZoomResetLandsExactlyOn100AfterAPinch() throws {
         let app = makeApp(); app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
-        func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
         canvas.pinch(withScale:0.73,velocity:-1)
-        // The pinch is a UIKit recognizer since the 2026-10-03 sensitivity fix, which XCUITest's synthesized
-        // pinch does drive (SwiftUI's MagnificationGesture, before it, often did not - this used to skip).
-        // So landing on a non-preset scale is now required, not skipped.
-        let presets: [Double] = [0.25,0.5,1,1.5,2]
-        XCTAssertTrue(presets.allSatisfy({ abs(exactScale() - $0) > 0.001 }), "the pinch must leave a non-preset scale, got \(exactScale())")
+        XCTAssertGreaterThan(abs(exactZoom(app) - 1), 0.05, "the pinch must have changed the scale, got \(exactZoom(app))")
         app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-100"].tap()
-        XCTAssertEqual(exactScale(),1,accuracy:0.0001)
+        XCTAssertTrue(app.buttons["zoom-reset-100"].waitForExistence(timeout: 2))
+        app.buttons["zoom-reset-100"].tap()
+        XCTAssertEqual(exactZoom(app),1,accuracy:0.0001)
     }
 
-    /// The same acceptance criterion as above (selecting a preset from a non-preset scale must land exactly
-    /// on it), but reaching that starting scale through a test-only launch hook instead of a live pinch -
-    /// which this harness cannot reliably use to get there (see the skip above, and the note on
-    /// testOperationHintStaysFixedDuringZoomAndPan) - so this one always actually runs (Codex major, 4E round 3).
+    /// The same, from a non-preset starting scale set by a launch hook rather than a live pinch.
     @MainActor
-    func testZoomMenuLandsExactlyOnAPresetFromAnInjectedNonPresetStartingScale() throws {
+    func testZoomResetLandsExactlyOn100FromAnInjectedStartingScale() throws {
         let app = makeApp()
         app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "0.73"
         app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
-        func exactScale() -> Double { Double(element(app,"zoom-scale-exact").value as? String ?? "") ?? .nan }
-        XCTAssertEqual(exactScale(),0.73,accuracy:0.0001,"the launch hook itself must have taken effect")
+        XCTAssertEqual(exactZoom(app),0.73,accuracy:0.0001,"the launch hook itself must have taken effect")
         app.buttons["zoom-menu"].tap()
-        app.buttons["zoom-100"].tap()
-        XCTAssertEqual(exactScale(),1,accuracy:0.0001)
+        XCTAssertEqual(element(app, "zoom-slider-percent").label, "73%")
+        app.buttons["zoom-reset-100"].tap()
+        XCTAssertEqual(exactZoom(app),1,accuracy:0.0001)
         XCTAssertTrue(element(app,"circuit-canvas").value.map { ($0 as? String ?? "").contains("scale=100") } ?? false)
     }
 
@@ -1758,9 +1762,8 @@ final class CircuitCanvasUITests: XCTestCase {
             let hint = element(app, "operation-hint")
             XCTAssertTrue(hint.exists)
             let original = hint.frame
-            // A pinch here is best-effort only: XCUITest's synthetic pinch has been unreliable in this
-            // harness (see the note on testZoomMenuLandsExactlyOnAPresetAfterAPinchToANonPresetScale) - the
-            // real guarantee for this comes from setZoom(_:)'s own tests.
+            // The pinch is a UIKit recognizer that XCUITest's pinch drives reliably (since the 2026-10-03
+            // sensitivity fix); the hint must stay put through it.
             canvas.pinch(withScale: 0.5, velocity: -1)
             // Captured after the pinch, not before: the two-finger pan recognizer and the pinch gesture are
             // allowed to recognize simultaneously, so a successful pinch can itself move canvasOffset (its

@@ -50,13 +50,27 @@ enum GridSnap {
 /// screen position across a scale change - used by the zoom menu (4E), which changes `canvasScale` directly
 /// rather than through a pinch, and must not otherwise disturb what is currently on screen.
 enum CanvasZoom {
-    /// The pinch range - the zoom menu's presets (25%-200%) all lie inside it.
+    /// The range of both the pinch and the zoom slider.
     static let minimumScale: CGFloat = 0.25
     static let maximumScale: CGFloat = 2.5
     /// How strongly a pinch zooms: the fingers' distance ratio is raised to this power. 1 would follow the
     /// fingers exactly, which on a real iPad hit the limits within a single pinch (feedback, 2026-10-03);
     /// at 0.6, spreading the fingers to twice their distance zooms about 1.5x.
     static let pinchSensitivity: CGFloat = 0.6
+
+    /// The zoom slider (feedback, 2026-10-03: a slider for any scale, instead of a menu of fixed ones) runs
+    /// 0...1 on a logarithmic scale, so a given slide zooms by the same factor anywhere along it - on a
+    /// linear one, 100% would sit a third of the way along and zooming out would be cramped into that third.
+    /// Scales are rounded to whole percents.
+    static func sliderScale(position: Double) -> CGFloat {
+        let t = min(max(position, 0), 1)
+        let raw = Double(minimumScale) * pow(Double(maximumScale / minimumScale), t)
+        return CGFloat((raw * 100).rounded() / 100)
+    }
+    static func sliderPosition(scale: CGFloat) -> Double {
+        let clamped = min(max(scale, minimumScale), maximumScale)
+        return log(Double(clamped / minimumScale)) / log(Double(maximumScale / minimumScale))
+    }
 
     /// The scale for a pinch that started at `startScale` and whose fingers are now `gestureScale` times as
     /// far apart as when it began.

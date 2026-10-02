@@ -144,6 +144,7 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showInspector = false
     @State private var showSettings = false
+    @State private var showZoomSlider = false
     @State private var showResetConfirmation = false
     @State private var canvasName = "Circuit Canvas"
     @State private var canvasDescription = ""
@@ -744,14 +745,12 @@ struct ContentView: View {
     /// The on-canvas "倍率 n%" label doubles as the zoom menu's trigger (the toolbar used to carry a
     /// separate icon button for this; removed once there were enough toolbar icons that it started to feel
     /// crowded - tapping the existing, always-visible label is one fewer icon to make room for).
+    /// Tapping the scale opens a slider for any scale from 25% to 250% (feedback, 2026-10-03 - it used to be
+    /// a menu of five fixed percentages), plus a button back to exactly 100%. Zooms around the viewport's
+    /// center, like the menu did (setZoom).
     private var zoomIndicator: some View {
-        Menu {
-            ForEach([25,50,100,150,200], id: \.self) { percent in
-                Button("\(percent)%") { setZoom(CGFloat(percent)/100) }
-                    .accessibilityIdentifier("zoom-\(percent)")
-            }
-        } label: {
-            Label("倍率 \(Int(canvasScale * 100))%", systemImage: "arrow.up.left.and.arrow.down.right")
+        Button { showZoomSlider = true } label: {
+            Label("倍率 \(Int((canvasScale * 100).rounded()))%", systemImage: "arrow.up.left.and.arrow.down.right")
                 .font(.caption.weight(.medium))
                 .padding(8)
                 .background(.thinMaterial, in: Capsule())
@@ -759,6 +758,42 @@ struct ContentView: View {
         .disabled(toolbarDisabled)
         .accessibilityIdentifier("zoom-menu")
         .reportsCoachmarkFrame(.zoomIndicator, into: $coachmarkFrames)
+        .popover(isPresented: $showZoomSlider, arrowEdge: .top) { zoomSliderPanel }
+    }
+
+    private var zoomSliderPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("倍率").font(.headline)
+                Spacer()
+                Text("\(Int((canvasScale * 100).rounded()))%")
+                    .font(.headline.monospacedDigit())
+                    .accessibilityIdentifier("zoom-slider-percent")
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "minus.magnifyingglass").foregroundStyle(.secondary)
+                Slider(value: Binding(get: { CanvasZoom.sliderPosition(scale: canvasScale) },
+                                      set: { setZoom(CanvasZoom.sliderScale(position: $0)) }),
+                       in: 0...1)
+                    .accessibilityLabel("倍率")
+                    .accessibilityValue("\(Int((canvasScale * 100).rounded()))%")
+                    .accessibilityIdentifier("zoom-slider")
+                Image(systemName: "plus.magnifyingglass").foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("\(Int(CanvasZoom.minimumScale * 100))%")
+                Spacer()
+                Text("\(Int(CanvasZoom.maximumScale * 100))%")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            Button("100% に戻す") { setZoom(1) }
+                .buttonStyle(.bordered)
+                .disabled(canvasScale == 1)
+                .accessibilityIdentifier("zoom-reset-100")
+        }
+        .padding(16)
+        .frame(width: 320)
+        .presentationCompactAdaptation(.popover)
     }
 
     private var canvasSize: CGSize { .init(width: 2_400, height: 1_800) }
