@@ -246,6 +246,17 @@ final class CircuitCanvasUITests: XCTestCase {
         slider.adjust(toNormalizedSliderPosition: log(percent / 25) / log(10))
     }
 
+    enum SliderEnd { case left, right }
+    /// Grabs the zoom slider's thumb where the current scale puts it and drags it far beyond one end.
+    @MainActor private func dragZoomSliderThumb(_ app: XCUIApplication, pastEnd end: SliderEnd) {
+        let slider = app.sliders["zoom-slider"]
+        let position = log(exactZoom(app) / 0.25) / log(10)
+        // UISlider's track is inset by about half the thumb's width at each end.
+        let inset = 14 / slider.frame.width
+        let thumb = slider.coordinate(withNormalizedOffset: CGVector(dx: inset + position * (1 - 2 * inset), dy: 0.5))
+        thumb.press(forDuration: 0.1, thenDragTo: thumb.withOffset(CGVector(dx: end == .left ? -600 : 600, dy: 0)))
+    }
+
     @MainActor private func exactZoom(_ app: XCUIApplication) -> Double {
         Double(element(app, "zoom-scale-exact").value as? String ?? "") ?? .nan
     }
@@ -281,6 +292,11 @@ final class CircuitCanvasUITests: XCTestCase {
         app.sliders["zoom-slider"].adjust(toNormalizedSliderPosition: 1)
         XCTAssertLessThanOrEqual(exactZoom(app), 2.5)
         XCTAssertGreaterThan(exactZoom(app), 2.2)
+        // Dragging the thumb itself well past each end, as a finger would, does reach the limits exactly.
+        dragZoomSliderThumb(app, pastEnd: .right)
+        XCTAssertEqual(exactZoom(app), 2.5, accuracy: 0.0001, "dragging past the right end must reach 250%")
+        dragZoomSliderThumb(app, pastEnd: .left)
+        XCTAssertEqual(exactZoom(app), 0.25, accuracy: 0.0001, "dragging past the left end must reach 25%")
 
         // 100% に戻す lands exactly on 100%.
         app.buttons["zoom-reset-100"].tap()
@@ -341,7 +357,9 @@ final class CircuitCanvasUITests: XCTestCase {
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
         canvas.pinch(withScale:0.73,velocity:-1)
-        XCTAssertGreaterThan(abs(exactZoom(app) - 1), 0.05, "the pinch must have changed the scale, got \(exactZoom(app))")
+        let pinched = exactZoom(app)
+        XCTAssertGreaterThan(abs(pinched - 1), 0.05, "the pinch must have changed the scale, got \(pinched)")
+        XCTAssertGreaterThan(abs(pinched * 100 - (pinched * 100).rounded()), 0.0001, "a pinch should leave a fractional percent, got \(pinched)")
         app.buttons["zoom-menu"].tap()
         XCTAssertTrue(app.buttons["zoom-reset-100"].waitForExistence(timeout: 2))
         app.buttons["zoom-reset-100"].tap()
@@ -352,11 +370,12 @@ final class CircuitCanvasUITests: XCTestCase {
     @MainActor
     func testZoomResetLandsExactlyOn100FromAnInjectedStartingScale() throws {
         let app = makeApp()
-        app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "0.73"
+        // 73.4%: a fraction of a percent, which neither the slider nor its percent label can show exactly.
+        app.launchEnvironment["UITEST_INITIAL_ZOOM"] = "0.734"
         app.launch()
         let canvas = element(app,"circuit-canvas")
         XCTAssertTrue(canvas.waitForExistence(timeout:3))
-        XCTAssertEqual(exactZoom(app),0.73,accuracy:0.0001,"the launch hook itself must have taken effect")
+        XCTAssertEqual(exactZoom(app),0.734,accuracy:0.00001,"the launch hook itself must have taken effect")
         app.buttons["zoom-menu"].tap()
         XCTAssertEqual(element(app, "zoom-slider-percent").label, "73%")
         app.buttons["zoom-reset-100"].tap()
