@@ -3373,9 +3373,15 @@ final class CircuitCanvasUITests: XCTestCase {
         // Pan as far left as the pan margin allows: the canvas's right edge ends up 200pt from the left, so the
         // viewport's center (where XCUITest pinches) is over the gray margin.
         app.buttons["pan-mode-toggle"].tap()
+        // Points measured from the viewport's own size, not normalized to the canvas element's frame: on
+        // iPadOS 18 XCUITest reports that frame as the whole 2400x1800 canvas, not the visible viewport, so a
+        // normalized point lands off screen.
+        let viewport = (element(app, "viewport-size").value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+        XCTAssertEqual(viewport.count, 2)
+        let origin = canvas.coordinate(withNormalizedOffset: .zero)
         for _ in 0..<5 {
-            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)))
+            let start = origin.withOffset(CGVector(dx: viewport[0] * 0.9, dy: viewport[1] * 0.5))
+            start.press(forDuration: 0.2, thenDragTo: start.withOffset(CGVector(dx: -viewport[0] * 0.8, dy: 0)))
         }
         XCTAssertEqual(offsetX(), 200 - 2400, accuracy: 1, "the pan should have stopped at the margin")
 
