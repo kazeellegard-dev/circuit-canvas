@@ -17,19 +17,17 @@
 			</array>
 		</dict>
 	</array>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.kazeellegard.circuitcanvas.diagram</string>
-			<key>UTTypeDescription</key>
-			<string>Circuit Canvas Diagram</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.json</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>Circuit Canvas Diagram</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.kazeellegard.circuitcanvas.diagram</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>

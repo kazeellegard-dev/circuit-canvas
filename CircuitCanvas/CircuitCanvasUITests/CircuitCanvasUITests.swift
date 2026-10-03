@@ -230,7 +230,7 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["関連付ける角をタップ"].waitForExistence(timeout:2))
         // A background tap while still choosing a corner (Codex minor, 4A round 1) must cancel relate mode
         // outright, not just deselect while leaving the "pick a corner" hint stuck on screen.
-        let background = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:50,dy:900))
+        let background = element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:50,dy:700))
         background.tap()
         XCTAssertFalse(app.staticTexts["関連付ける角をタップ"].exists)
         XCTAssertFalse(app.staticTexts["関連付けたい位置をタップ"].exists)
@@ -1336,9 +1336,11 @@ final class CircuitCanvasUITests: XCTestCase {
     @MainActor
     func testEditModeOnlyDeletesTheWholeGroupNotIndividualMembers() throws {
         let app = makeApp(); app.launch()
-        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
-        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
-        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+        // x around 500, not 700: on the 810pt-wide iPad (7th generation) the group's delete badge, at its
+        // top-right corner, would sit past the viewport's right edge.
+        place(app, category:"受動部品", name:"抵抗", x:500, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:500, y:600)
+        groupViaMarquee(app, from: CGVector(dx:420,dy:470), to: CGVector(dx:580,dy:630))
         let groupID = element(app,"symbol-抵抗-group").value as? String ?? ""
         XCTAssertFalse(groupID.isEmpty)
         XCTAssertEqual(groupID, element(app,"symbol-コンデンサ-group").value as? String)
@@ -1358,9 +1360,11 @@ final class CircuitCanvasUITests: XCTestCase {
     @MainActor
     func testUngroupingRestoresIndividualSelectionAndEditing() throws {
         let app = makeApp(); app.launch()
-        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
-        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
-        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+        // x around 500, not 700: on the 810pt-wide iPad (7th generation) the group's delete badge, at its
+        // top-right corner, would sit past the viewport's right edge.
+        place(app, category:"受動部品", name:"抵抗", x:500, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:500, y:600)
+        groupViaMarquee(app, from: CGVector(dx:420,dy:470), to: CGVector(dx:580,dy:630))
 
         element(app,"symbol-抵抗").tap()
         XCTAssertTrue(app.buttons["group-ungroup"].waitForExistence(timeout:2))
@@ -1540,9 +1544,11 @@ final class CircuitCanvasUITests: XCTestCase {
     @MainActor
     func testUndoRedoOnGroupingUngroupingMovingAndDeletingAGroup() throws {
         let app = makeApp(); app.launch()
-        place(app, category:"受動部品", name:"抵抗", x:700, y:500)
-        place(app, category:"受動部品", name:"コンデンサ", x:700, y:600)
-        groupViaMarquee(app, from: CGVector(dx:620,dy:470), to: CGVector(dx:780,dy:630))
+        // x around 500, not 700: on the 810pt-wide iPad (7th generation) the group's delete badge, at its
+        // top-right corner, would sit past the viewport's right edge.
+        place(app, category:"受動部品", name:"抵抗", x:500, y:500)
+        place(app, category:"受動部品", name:"コンデンサ", x:500, y:600)
+        groupViaMarquee(app, from: CGVector(dx:420,dy:470), to: CGVector(dx:580,dy:630))
         let groupID = element(app,"symbol-抵抗-group").value as? String ?? ""
         XCTAssertFalse(groupID.isEmpty)
 
@@ -1798,7 +1804,10 @@ final class CircuitCanvasUITests: XCTestCase {
             // offset, not the whole -value string: the pinch also legitimately changes the scale portion,
             // which must not fail this "did not pan" check either (Codex major, 5B round 2).
             let beforeOffset = element(app,"canvas-offset-exact").value as? String
-            let source = canvas.coordinate(withNormalizedOffset: CGVector(dx:0.8,dy:0.8))
+            // From the viewport's size, not normalized to the canvas element: on iPadOS 18 XCUITest reports that
+            // element as the whole 2400x1800 canvas, so 0.8/0.8 of it was far off screen.
+            let viewport = (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap { Double($0) }
+            let source = canvas.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: viewport[0]*0.8, dy: viewport[1]*0.8))
             // These tools no longer pan on a one-finger drag at all (5B, 2026-09-29 feedback) - confirming
             // that (not just that the hint didn't move) is what makes this a meaningful regression guard now.
             source.press(forDuration:0.1,thenDragTo:source.withOffset(CGVector(dx:-60,dy:-50)))
@@ -2016,7 +2025,10 @@ final class CircuitCanvasUITests: XCTestCase {
         XCTAssertTrue(zip(attached,attached.dropFirst()).contains { $0.x == after[1].x && $1.x == after[1].x })
         app.buttons["選択"].tap()
         // Clear symbol selection on a blank area before opening the diagram inspector.
-        element(app,"circuit-canvas").coordinate(withNormalizedOffset:CGVector(dx:0.85,dy:0.85)).tap()
+        // (From the viewport's size: on iPadOS 18 the canvas element is reported as the whole 2400x1800
+        // canvas, so 0.85/0.85 of it was off screen.)
+        let visible = (element(app,"viewport-size").value as? String ?? "").split(separator:",").compactMap { Double($0) }
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:visible[0]*0.85,dy:visible[1]*0.85)).tap()
         assertWireCount(app,"3")
     }
 
@@ -2218,10 +2230,11 @@ final class CircuitCanvasUITests: XCTestCase {
         for (category,names) in groups {
             for name in names {
                 let x: CGFloat, y: CGFloat
+                // Every row within the iPad (7th generation)'s 825pt-tall viewport: the last one at y=780.
                 if category == "電源" {
-                    x = 75 + 110 * CGFloat(names.firstIndex(of:name)!); y = 560
+                    x = 75 + 110 * CGFloat(names.firstIndex(of:name)!); y = 470
                 } else {
-                    x = 60 + 85 * CGFloat(horizontalCount % 9); y = 660 + 80 * CGFloat(horizontalCount / 9)
+                    x = 60 + 85 * CGFloat(horizontalCount % 9); y = 540 + 80 * CGFloat(horizontalCount / 9)
                     horizontalCount += 1
                 }
                 place(app,category:category,name:name,x:x,y:y)
@@ -2766,13 +2779,14 @@ final class CircuitCanvasUITests: XCTestCase {
             (value ?? "").components(separatedBy: CharacterSet(charactersIn: "xy=, ")).compactMap { Double($0) }
         }
 
-        // Every tap point below (703/502, 704/803, 706/906) is deliberately off the 15pt grid.
+        // Every tap point below (703/502, 704/653, 706/756) is deliberately off the 15pt grid, and within the
+        // iPad (7th generation)'s 825pt-tall viewport.
         place(app, category:"受動部品", name:"抵抗", x:703, y:502)
         let pin = coordinates(app.buttons["symbol-抵抗-pin-0"])
         XCTAssertTrue(onFifteenPointGrid(pin[0]) && onFifteenPointGrid(pin[1]), "a placed symbol's pin must land on the 15pt grid: \(pin)")
 
         app.buttons["＋メモ"].tap()
-        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:704,dy:803)).tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:704,dy:653)).tap()
         let note = element(app,"experiment-note-新しいメモ")
         XCTAssertTrue(note.waitForExistence(timeout:2))
         let notePosition = position(note.value as? String)
@@ -2780,7 +2794,7 @@ final class CircuitCanvasUITests: XCTestCase {
 
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
-        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:706,dy:906)).tap()
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:706,dy:756)).tap()
         let text = element(app,"text-テキスト")
         XCTAssertTrue(text.waitForExistence(timeout:2))
         let textPosition = position(text.value as? String)
@@ -2881,8 +2895,9 @@ final class CircuitCanvasUITests: XCTestCase {
             app.buttons["symbol-直流電源-pin-1"].tap()
             app.buttons["symbol-GND-pin-0"].tap()
         } else {
-            place(app, category:"受動部品", name:"抵抗", x:300, y:700)
-            place(app, category:"受動部品", name:"コンデンサ", x:600, y:850)
+            // Within the iPad (7th generation)'s 825pt-tall viewport (this used to be 700/850).
+            place(app, category:"受動部品", name:"抵抗", x:300, y:560)
+            place(app, category:"受動部品", name:"コンデンサ", x:600, y:710)
             app.buttons["配線"].tap()
             app.buttons["symbol-抵抗-pin-1"].tap()
             app.buttons["symbol-コンデンサ-pin-0"].tap()
