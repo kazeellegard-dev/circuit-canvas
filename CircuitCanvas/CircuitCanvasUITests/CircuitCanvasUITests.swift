@@ -2194,7 +2194,9 @@ final class CircuitCanvasUITests: XCTestCase {
         item.tap()
         element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero)
             .withOffset(CGVector(dx:x,dy:y)).tap()
-        XCTAssertTrue(element(app,"symbol-\(name)").exists, "placing \(name) at \(x),\(y)")
+        // Waits briefly rather than checking at once: the symbol can take a moment to appear (seen as a
+        // first-run failure that its retry passed).
+        XCTAssertTrue(element(app,"symbol-\(name)").waitForExistence(timeout:2), "placing \(name) at \(x),\(y)")
     }
 
     /// Pin offsets of the multi-terminal symbols at rotation 0 (centre origin, y down), by kind name.
@@ -2827,7 +2829,9 @@ final class CircuitCanvasUITests: XCTestCase {
 
         app.buttons["library-category-テキスト"].tap()
         app.buttons["library-テキスト"].tap()
-        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:800)).tap()
+        // y=700 (it was 800): the text and the end of its drag below both stay within the iPad (7th
+        // generation)'s 825pt-tall viewport.
+        element(app,"circuit-canvas").coordinate(withNormalizedOffset:.zero).withOffset(CGVector(dx:700,dy:700)).tap()
         let text = element(app,"text-テキスト")
         XCTAssertTrue(text.waitForExistence(timeout:2))
         let textBefore = position(text.value as? String)
